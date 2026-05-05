@@ -208,16 +208,17 @@ echo "✅ GitHub variables configured"
 ### Step 10: Create GitHub Environment with Protection Rules
 
 ```bash
-# Create production environment with required reviewers
+# Create production environment
+# Note: wait_timer is a paid feature — omit it on free personal accounts
 gh api \
   --method PUT \
   -H "Accept: application/vnd.github+json" \
-  /repos/$GITHUB_ORG/$GITHUB_REPO/environments/production \
-  --field wait_timer=0
+  /repos/$GITHUB_ORG/$GITHUB_REPO/environments/production
 
 echo "✅ GitHub environment 'production' created"
 echo "   Go to: https://github.com/$GITHUB_ORG/$GITHUB_REPO/settings/environments"
-echo "   Add yourself as required reviewer for production"
+echo "   Add yourself as required reviewer for production (this is FREE)"
+echo "   Required reviewers = manual approval gate before every deployment"
 ```
 
 ---
@@ -238,7 +239,8 @@ az storage account create \
   --sku Standard_LRS \
   --encryption-services blob \
   --min-tls-version TLS1_2 \
-  --allow-blob-public-access false
+  --allow-blob-public-access false \
+  --tags project=devops-aks-project environment=learning managed_by=manual
 
 az storage container create \
   --name "$CONTAINER_NAME" \
@@ -270,10 +272,8 @@ az acr create \
   --name "$ACR_NAME" \
   --sku Basic \
   --admin-enabled false \
-  --location "$AZURE_LOCATION"
-
-# Enable ACR tasks (needed for GitHub Actions push)
-az acr update --name "$ACR_NAME" --resource-group "$RESOURCE_GROUP"
+  --location "$AZURE_LOCATION" \
+  --tags project=devops-aks-project environment=learning managed_by=manual
 
 echo "ACR Login Server: $(az acr show --name $ACR_NAME --query loginServer -o tsv)"
 ```
