@@ -1,0 +1,110 @@
+# =============================================================================
+# Terraform
+# =============================================================================
+
+# Local variable files — may contain secrets/subscription IDs
+terraform/*.tfvars
+terraform/*.tfvars.json
+!terraform/*.tfvars.example   # Allow example/template files to be committed
+
+# Terraform state — never commit state files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Plan files — binary, environment-specific
+*.tfplan
+*.plan
+
+# Terraform working directory
+**/.terraform/
+
+# Lock file — DO commit this (pins provider versions for reproducible runs)
+# **/.terraform.lock.hcl
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Terraform override files (local developer overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# =============================================================================
+# Kubernetes / Helm
+# =============================================================================
+
+# Kubeconfig — contains cluster credentials
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Helm chart dependencies
+charts/
+
+# Rendered manifests with secrets
+*-values-local.yaml
+*-secrets.yaml
+
+# =============================================================================
+# Secrets & Credentials
+# =============================================================================
+
+# Generic secret files
+*.secret
+*.secrets
+*.env
+.env
+.env.*
+!.env.example
+
+# Azure auth files
+.azure/
+azureauth.json
+azure.json
+
+# SSH keys (just in case)
+*.pem
+*.key
+!*.key.example
+
+# =============================================================================
+# OS / Editor
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# VS Code
+.vscode/
+!.vscode/extensions.json   # Allow recommended extensions to be committed
+
+# JetBrains IDEs
+.idea/
+
+# =============================================================================
+# Build / Temporary
+# =============================================================================
+
+# Docker
+.dockerignore
+
+# Logs
+*.log
+logs/
+
+# Temp files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp

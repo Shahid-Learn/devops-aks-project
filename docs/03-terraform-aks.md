@@ -14,8 +14,8 @@ Azure Resource Group: rg-devops-aks
 │   └── (Reserved for future use)
 │
 ├── AKS Cluster
-│   ├── System node pool (Standard_D2s_v3 × 2)
-│   ├── App node pool   (Standard_D4s_v3 × 1–3, autoscale)
+│   ├── System node pool (Standard_B2ms × 1)   ← cost-optimised for learning
+│   ├── App node pool   (Standard_B4ms × 1–2, autoscale)
 │   ├── OIDC Issuer enabled
 │   ├── Workload Identity enabled
 │   └── Managed Identity (for ACR pull)
@@ -52,24 +52,17 @@ terraform/
 
 ```hcl
 terraform {
-  required_version = ">= 1.7.0"
+  required_version = ">= 1.15.0"
 
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.110"
+      version = "~> 4.0"   # Allows all 4.x updates, not 5.x
     }
     azuread = {
       source  = "hashicorp/azuread"
-      version = "~> 2.53"
+      version = "~> 3.0"
     }
-  }
-
-  backend "azurerm" {
-    resource_group_name  = "rg-devops-aks"
-    storage_account_name = "<your-storage-account>"  # from Section 2
-    container_name       = "tfstate"
-    key                  = "aks-project.tfstate"
   }
 }
 
@@ -80,17 +73,38 @@ provider "azurerm" {
       recover_soft_deleted_key_vaults = true
     }
   }
+  subscription_id = var.subscription_id  # Required in azurerm 4.x
 }
 
 provider "azuread" {}
 ```
 
+### `terraform/backend.tf`
+
+> Separated from `providers.tf` so the backend config is easy to find and modify independently.
+
+```hcl
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "rg-devops-aks"
+    storage_account_name = "<your-storage-account>"  # from Section 2
+    container_name       = "tfstate"
+    key                  = "aks-project.tfstate"
+  }
+}
+```
+
 ### `terraform/variables.tf`
 
 ```hcl
+variable "subscription_id" {
+  type        = string
+  description = "Azure Subscription ID (required by azurerm 4.x provider)"
+}
+
 variable "location" {
   type        = string
-  default     = "eastus"
+  default     = "swedencentral"   # Region where rg-devops-aks was created in Section 2
   description = "Azure region for all resources"
 }
 
@@ -114,19 +128,19 @@ variable "kubernetes_version" {
 
 variable "acr_name" {
   type        = string
-  default     = "acrdevopsproject"
+  default     = "acrdevopsprojectd1e51ba4"   # ACR name created in Section 2 (globally unique suffix)
   description = "Azure Container Registry name (must be globally unique)"
 }
 
 variable "node_vm_size_system" {
   type        = string
-  default     = "Standard_D2s_v3"
+  default     = "Standard_B2ms"   # Burstable — cheaper for learning; upgrade to D2s_v3 for prod
   description = "VM size for system node pool"
 }
 
 variable "node_vm_size_app" {
   type        = string
-  default     = "Standard_D4s_v3"
+  default     = "Standard_B4ms"   # Burstable — 4 CPU / 16 GB, enough for all OTel demo services
   description = "VM size for app node pool"
 }
 
@@ -145,6 +159,7 @@ variable "tags" {
 ```hcl
 data "azurerm_client_config" "current" {}
 
+# Reference the existing resource group (created manually in Section 2)
 data "azurerm_resource_group" "main" {
   name = var.resource_group_name
 }
@@ -311,12 +326,13 @@ resource "azurerm_kubernetes_cluster" "main" {
   tags                = var.tags
 
   # System node pool — always on, runs system pods
+  # 1 node is sufficient for learning (not HA, but saves ~$60/month)
   default_node_pool {
     name                = "system"
-    node_count          = 2
+    node_count          = 1
     vm_size             = var.node_vm_size_system
     vnet_subnet_id      = var.subnet_id
-    os_disk_size_gb     = 128
+    os_disk_size_gb     = 64    # Reduced from 128 — saves on managed disk cost
     type                = "VirtualMachineScaleSets"
     only_critical_addons_enabled = true  # Taint: only system pods here
   }
@@ -331,16 +347,20 @@ resource "azurerm_kubernetes_cluster" "main" {
   workload_identity_enabled = true
 
   # Network config
+  # VNet: 10.0.0.0/16, AKS subnet: 10.0.0.0/22
+  # Service CIDR must not overlap with any subnet — use a separate range
   network_profile {
     network_plugin    = "azure"
     network_policy    = "azure"
     load_balancer_sku = "standard"
     outbound_type     = "loadBalancer"
+    service_cidr      = "10.1.0.0/16"
+    dns_service_ip    = "10.1.0.10"
   }
 
-  # Azure Monitor integration
+  # Azure AD RBAC — simplified in azurerm 4.x
   azure_active_directory_role_based_access_control {
-    managed = true
+    tenant_id          = var.tenant_id
     azure_rbac_enabled = true
   }
 
@@ -360,11 +380,13 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
   os_disk_size_gb       = 128
   mode                  = "User"
 
-  # Autoscaling
-  enable_auto_scaling = true
-  min_count           = 1
-  max_count           = 3
-  node_count          = 1
+  # Autoscaling — max 2 nodes is enough for learning
+  # Note: azurerm 4.x renamed enable_auto_scaling → auto_scaling_enabled
+  auto_scaling_enabled = true
+  min_count            = 1
+  max_count            = 2
+  node_count           = 1
+  os_disk_size_gb      = 64   # Reduced from 128
 
   node_labels = {
     "workload-type" = "app"
@@ -503,14 +525,22 @@ terraform output get_credentials_command
 ## 3.9 Connect kubectl to AKS
 
 ```bash
-# Get credentials (from terraform output or directly)
+# Get credentials — newer az CLI versions auto-convert kubeconfig (no need to run kubelogin separately)
 az aks get-credentials \
   --resource-group rg-devops-aks \
   --name aks-devops-project \
   --overwrite-existing
 
-# Convert kubeconfig for non-interactive use
-kubelogin convert-kubeconfig -l azurecli
+# If kubeconfig was NOT auto-converted (older az CLI), run this:
+# kubelogin convert-kubeconfig -l azurecli
+
+# Grant your user cluster admin access (azure_rbac_enabled=true requires explicit Azure RBAC)
+AKS_ID=$(az aks show --resource-group rg-devops-aks --name aks-devops-project --query id -o tsv | tr -d '\r')
+az role assignment create \
+  --assignee-object-id "<your-user-object-id>" \
+  --assignee-principal-type User \
+  --role "Azure Kubernetes Service RBAC Cluster Admin" \
+  --scope "$AKS_ID"
 
 # Verify connection
 kubectl get nodes
@@ -524,20 +554,45 @@ kubectl get nodes --show-labels | grep workload-type
 
 ## 3.10 Cost Estimates
 
+### Learning Setup (what we use)
+
 | Resource | SKU | Approx. Monthly Cost |
 |---------|-----|---------------------|
-| AKS System pool (2× D2s_v3) | Standard_D2s_v3 | ~$140 |
-| AKS App pool (1–3× D4s_v3) | Standard_D4s_v3 | ~$140–$420 |
+| AKS System pool (1× B2ms) | Standard_B2ms | ~$60 |
+| AKS App pool (1–2× B4ms) | Standard_B4ms | ~$121–$242 |
 | ACR | Basic | ~$5 |
 | Load Balancer | Standard | ~$18 |
 | Storage (TF state) | LRS | ~$1 |
 | Key Vault | Standard | ~$4 |
-| **Total (min)** | | **~$308/month** |
+| **Total (1 app node)** | | **~$209/month** |
+| **Total (scaled to 0 app)** | | **~$88/month** |
+
+### If upgrading to D-series (production-like)
+
+| Resource | SKU | Approx. Monthly Cost |
+|---------|-----|---------------------|
+| AKS System pool (2× D2s_v3) | Standard_D2s_v3 | ~$134 |
+| AKS App pool (1–3× D4s_v3) | Standard_D4s_v3 | ~$134–$402 |
+| **Total (min)** | | **~$296/month** |
 
 > **Cost Saving Tips:**
-> - Use spot instances for app node pool (`priority = "Spot"`)
-> - Scale down after learning sessions: `az aks scale --node-count 0 --nodepool-name app`
-> - Delete cluster when not in use and recreate with Terraform
+> - **Scale app pool to 0 after each learning session** — biggest saving
+> - B-series VMs burst CPU on demand and are idle-cheap — ideal for dev
+> - Delete cluster entirely when not using for >1 week (`terraform destroy` then `terraform apply` to recreate in ~10 min)
+
+```bash
+# Scale down app pool at end of session (system pool stays at 1 node)
+az aks nodepool scale \
+  --resource-group rg-devops-aks \
+  --cluster-name aks-devops-project \
+  --name app --node-count 0
+
+# Scale back up when resuming
+az aks nodepool scale \
+  --resource-group rg-devops-aks \
+  --cluster-name aks-devops-project \
+  --name app --node-count 1
+```
 
 ---
 
