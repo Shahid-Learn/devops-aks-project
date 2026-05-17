@@ -511,6 +511,15 @@ Code Push to main
 | Add `workflow_dispatch` to all workflows | Allows manual re-runs |
 | Use `GITHUB_STEP_SUMMARY` | Rich deployment summaries in Actions UI |
 
+> [!NOTE]
+> Corporate TLS interception issues (for example Zscaler CA trust problems during `docker build`/`az acr login`) are usually local-machine or self-hosted-runner concerns. GitHub-hosted runners typically do not sit behind your corporate proxy, so these issues are less common there. If you move to self-hosted runners inside corporate network, apply the same certificate trust patterns documented in [PRE-ACR-BUILD-CHECKLIST.md](PRE-ACR-BUILD-CHECKLIST.md).
+
+| Environment | Typical TLS behavior | What you should do |
+|---|---|---|
+| Local machine (WSL2 + corporate proxy) | Most likely to hit cert/trust errors during build/login | Apply WSL and Docker build trust fixes from [PRE-ACR-BUILD-CHECKLIST.md](PRE-ACR-BUILD-CHECKLIST.md) |
+| GitHub-hosted runners | Usually not behind corporate interception proxy | Standard workflow is typically enough; no special Zscaler handling needed |
+| Self-hosted runners (inside corporate network) | Can hit same cert issues as local machine | Install corporate CA chain on runner host and in build contexts; follow checklist patterns |
+
 ---
 
 ## Summary Checklist

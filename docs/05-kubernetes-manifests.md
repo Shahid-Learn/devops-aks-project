@@ -76,7 +76,25 @@ echo "Ingress IP: $INGRESS_IP"
 
 ## 5.3 Deploy OpenTelemetry Demo with Helm
 
-The OpenTelemetry project provides an official Helm chart. We'll customize it for AKS/ACR.
+The OpenTelemetry project provides an official Helm chart. We'll customize it to pull images from **our ACR** instead of the public OTel registry.
+
+### Why use our ACR instead of the public registry?
+
+| | Public OTel Registry | Our ACR |
+|---|---|---|
+| Default Helm chart behaviour | ✅ Pulls from `ghcr.io/open-telemetry/demo` | ❌ Must override values |
+| Works without any setup | ✅ Yes | Requires ACR + AKS role assignment |
+| Used in production / CI | ❌ No — not your registry | ✅ Yes — you control versions |
+| Supports custom Dockerfile changes | ❌ No | ✅ Yes |
+| Image tag is your git SHA | ❌ No | ✅ Yes (`52a8a76`) |
+
+**Rule of thumb:** Use the public registry to get started quickly. Use your ACR once you want full control — custom builds, your own CI/CD pipeline, and no dependency on upstream availability.
+
+Our images are already in ACR:
+- Registry: `acrdevopsprojectd1e51ba4.azurecr.io`
+- Repository: `otel-demo`
+- Tag format: `<git-sha>-<service-name>` (e.g. `52a8a76-frontend`)
+- AKS already has `AcrPull` permission via managed identity — no `imagePullSecrets` needed
 
 ### Step 1: Add the OTel Helm repo
 
@@ -84,27 +102,52 @@ The OpenTelemetry project provides an official Helm chart. We'll customize it fo
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
 helm repo update
 
-# Inspect the default values
+# Inspect the default values to understand the image override structure
 helm show values open-telemetry/opentelemetry-demo > /tmp/otel-demo-defaults.yaml
+cat /tmp/otel-demo-defaults.yaml | grep -A5 "image:"
 ```
 
 ### Step 2: Create Custom Values File
 
-Create `k8s/otel-demo/values.yaml`:
+Create `k8s/otel-demo/values.yaml`.
+
+The key override is `components.<serviceName>.image.repository` — each service needs its own
+entry because our ACR uses per-service tags (`otel-demo:frontend-52a8a76`) rather than one tag per repo.
+
+```bash
+# Set your values
+ACR="acrdevopsprojectd1e51ba4.azurecr.io"
+TAG="52a8a76"   # git SHA from the build that pushed to ACR
+```
 
 ```yaml
 # k8s/otel-demo/values.yaml
+#
+# Overrides for the official opentelemetry-demo Helm chart.
+# Images are pulled from ACR — all 22 custom images were pushed with git SHA 52a8a76.
+#
+# Tag format: <git-sha>-<service-name>  e.g. 52a8a76-frontend
+# Verify tags: az acr repository show-tags --name acrdevopsprojectd1e51ba4 --repository otel-demo --output tsv | sort
 
-# Override image registry to use ACR
-default:
-  image:
-    repository: acrdevopsproject.azurecr.io
-    tag: "v1.0.0"          # Use git SHA in CI/CD
-    pullPolicy: IfNotPresent
-
-# Ingress configuration
 components:
+
+  frontend:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-frontend"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        memory: "250Mi"
+        cpu: "100m"
+      limits:
+        memory: "400Mi"
+
   frontendProxy:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-frontend-proxy"
+      pullPolicy: IfNotPresent
     ingress:
       enabled: true
       annotations:
@@ -116,42 +159,11 @@ components:
             - path: /
               pathType: Prefix
 
-# OpenTelemetry Collector configuration
-opentelemetry-collector:
-  config:
-    exporters:
-      # Send traces to Jaeger
-      otlp/jaeger:
-        endpoint: "jaeger-collector:4317"
-        tls:
-          insecure: true
-      # Send metrics to Prometheus
-      prometheus:
-        endpoint: "0.0.0.0:9464"
-      # Debug logging
-      debug:
-        verbosity: basic
-
-    service:
-      pipelines:
-        traces:
-          exporters: [otlp/jaeger, debug]
-        metrics:
-          exporters: [prometheus, debug]
-        logs:
-          exporters: [debug]
-
-# Resource limits — adjust for your node sizes
-components:
-  adService:
-    resources:
-      requests:
-        memory: "300Mi"
-        cpu: "100m"
-      limits:
-        memory: "500Mi"
-
   cartService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-cart"
+      pullPolicy: IfNotPresent
     resources:
       requests:
         memory: "160Mi"
@@ -160,6 +172,10 @@ components:
         memory: "250Mi"
 
   checkoutService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-checkout"
+      pullPolicy: IfNotPresent
     resources:
       requests:
         memory: "150Mi"
@@ -167,21 +183,129 @@ components:
       limits:
         memory: "250Mi"
 
-  frontend:
-    resources:
-      requests:
-        memory: "250Mi"
-        cpu: "100m"
-      limits:
-        memory: "400Mi"
-
   productCatalogService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-product-catalog"
+      pullPolicy: IfNotPresent
     resources:
       requests:
         memory: "60Mi"
         cpu: "50m"
       limits:
         memory: "120Mi"
+
+  productReviewsService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-product-reviews"
+      pullPolicy: IfNotPresent
+
+  recommendationService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-recommendation"
+      pullPolicy: IfNotPresent
+
+  adService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-ad"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        memory: "300Mi"
+        cpu: "100m"
+      limits:
+        memory: "500Mi"
+
+  paymentService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-payment"
+      pullPolicy: IfNotPresent
+
+  shippingService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-shipping"
+      pullPolicy: IfNotPresent
+
+  emailService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-email"
+      pullPolicy: IfNotPresent
+
+  currencyService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-currency"
+      pullPolicy: IfNotPresent
+
+  loadGenerator:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-load-generator"
+      pullPolicy: IfNotPresent
+
+  fraudDetectionService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-fraud-detection"
+      pullPolicy: IfNotPresent
+
+  quoteService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-quote"
+      pullPolicy: IfNotPresent
+
+  accountingService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-accounting"
+      pullPolicy: IfNotPresent
+
+  featureFlagService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-flagd-ui"
+      pullPolicy: IfNotPresent
+
+  llmService:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-llm"
+      pullPolicy: IfNotPresent
+
+  imageProvider:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-image-provider"
+      pullPolicy: IfNotPresent
+
+  # kafka and opensearch have custom images in OTel demo (pushed to ACR)
+  kafka:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-kafka"
+      pullPolicy: IfNotPresent
+
+  opensearch:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-opensearch"
+      pullPolicy: IfNotPresent
+
+  telemetryDocs:
+    image:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-telemetry-docs"
+      pullPolicy: IfNotPresent
+
+# Infrastructure services (jaeger, prometheus, grafana, postgresql, flagd)
+# use their official public images — no overrides needed here.
 ```
 
 ### Step 3: Deploy with Helm

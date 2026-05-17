@@ -10,7 +10,7 @@ A **production-grade DevOps pipeline** that:
 
 1. Provisions AKS infrastructure with Terraform (GitOps for infra)
 2. Builds and pushes Docker images to Azure Container Registry via GitHub Actions
-3. Deploys 15+ microservices (OpenTelemetry Astronomy Shop) to AKS with Helm
+3. Deploys 19 custom application services + 6 infrastructure services (OpenTelemetry Astronomy Shop) to AKS with Helm
 4. Provides full observability: distributed traces (Jaeger), metrics (Prometheus), dashboards (Grafana)
 5. Uses **zero stored credentials** — all Azure authentication via OIDC
 
