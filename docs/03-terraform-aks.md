@@ -536,8 +536,11 @@ az aks get-credentials \
 
 # Grant your user cluster admin access (azure_rbac_enabled=true requires explicit Azure RBAC)
 AKS_ID=$(az aks show --resource-group rg-devops-aks --name aks-devops-project --query id -o tsv | tr -d '\r')
+
+USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+
 az role assignment create \
-  --assignee-object-id "<your-user-object-id>" \
+  --assignee-object-id "$USER_OBJECT_ID" \
   --assignee-principal-type User \
   --role "Azure Kubernetes Service RBAC Cluster Admin" \
   --scope "$AKS_ID"

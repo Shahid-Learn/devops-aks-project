@@ -2,6 +2,44 @@
 
 > A study guide and reference for all key concepts in this project. Use this to review and reinforce your understanding.
 
+## Index
+
+- [9.1 Kubernetes Core Concepts (AKS Context)](#91-kubernetes-core-concepts-aks-context)
+- [9.2 AKS-Specific Concepts](#92-aks-specific-concepts)
+- [9.3 Terraform Key Concepts](#93-terraform-key-concepts)
+- [9.4 GitHub Actions Key Concepts](#94-github-actions-key-concepts)
+- [9.5 Docker & Container Concepts](#95-docker--container-concepts)
+- [9.6 OpenTelemetry Concepts](#96-opentelemetry-concepts)
+- [9.7 Networking in Kubernetes](#97-networking-in-kubernetes)
+- [9.8 Security Best Practices Applied in This Project](#98-security-best-practices-applied-in-this-project)
+- [9.9 Common kubectl Commands Reference](#99-common-kubectl-commands-reference)
+- [9.10 Helm Reference](#910-helm-reference)
+- [9.10.1 ACR-First Helm Strategy (OTel Demo)](#9101-acr-first-helm-strategy-otel-demo)
+- [9.11 Useful Resources](#911-useful-resources)
+- [9.12 Architecture Decision Records (ADR)](#912-architecture-decision-records-adr)
+- [9.13 Platform Engineer vs Application Team — Role Boundaries](#913-platform-engineer-vs-application-team--role-boundaries)
+- [9.14 Dockerfile Deep Dive — Interview Reference](#914-dockerfile-deep-dive--interview-reference)
+- [9.15 Real Lessons from This Project (Troubleshooting Log)](#915-real-lessons-from-this-project-troubleshooting-log)
+
+### Troubleshooting Log Index
+
+- [L-001: Kubernetes version rejected by AKS](#l-001-kubernetes-version-rejected-by-aks)
+- [L-002: AKS creation failed — service CIDR overlap](#l-002-aks-creation-failed--service-cidr-overlap)
+- [L-003: kubectl returned Forbidden despite cluster running](#l-003-kubectl-returned-forbidden-despite-cluster-running)
+- [L-004: Role assigned but kubectl still Forbidden](#l-004-role-assigned-but-kubectl-still-forbidden)
+- [L-005: WSL calling Windows az.exe instead of Linux az](#l-005-wsl-calling-windows-azexe-instead-of-linux-az)
+- [L-006: WSL2 DNS failure — IPv6 nameservers unreachable](#l-006-wsl2-dns-failure--ipv6-nameservers-unreachable)
+- [L-007: Docker daemon exposing insecure TCP endpoint](#l-007-docker-daemon-exposing-insecure-tcp-endpoint)
+- [L-008: Corporate TLS interception (Zscaler) breaking Docker builds](#l-008-corporate-tls-interception-zscaler-breaking-docker-builds)
+- [L-009: ACR connection required Tailscale (but shouldn't)](#l-009-acr-connection-required-tailscale-but-shouldnt)
+- [L-010: Frontend container has no shell (distroless)](#l-010-frontend-container-has-no-shell-distroless)
+- [L-011: Grafana ingress rejected by NGINX admission webhook](#l-011-grafana-ingress-rejected-by-nginx-admission-webhook)
+- [L-012: Helm timeout masked unschedulable DaemonSet pod](#l-012-helm-timeout-masked-unschedulable-daemonset-pod)
+- [L-013: Grafana SQLite lock contention during startup](#l-013-grafana-sqlite-lock-contention-during-startup)
+- [L-014: Prometheus Operator pre-upgrade hook pod stuck Pending](#l-014-prometheus-operator-pre-upgrade-hook-pod-stuck-pending)
+- [L-015: Autoscaler enabled pool cannot be manually scaled](#l-015-autoscaler-enabled-pool-cannot-be-manually-scaled)
+- [L-016: Sweden Central vCPU quota exhaustion blocked scale-out](#l-016-sweden-central-vcpu-quota-exhaustion-blocked-scale-out)
+
 ---
 
 ## 9.1 Kubernetes Core Concepts (AKS Context)
@@ -396,6 +434,8 @@ kubectl get resourcequota -n <ns>
 
 ## 9.10 Helm Reference
 
+For a full deep-dive on Helm chart structure, chart creation workflow, Prometheus chart anatomy, and reusable templates, see Section 11: `docs/11-helm-chart-learning.md`.
+
 ```bash
 # Repo management
 helm repo add <name> <url>
@@ -428,6 +468,102 @@ helm template <release> <chart> -f values.yaml   # Render manifests without depl
 ```
 
 ---
+
+## 9.10.1 ACR-First Helm Strategy (OTel Demo)
+
+When using ACR for this chart, use a hybrid strategy instead of forcing every image to ACR on day one.
+
+### Pattern that works reliably
+
+1. Set global repository to ACR for your custom app images.
+2. Keep known tricky components pinned to official images until you confirm compatible custom builds.
+3. Move those components to ACR only after explicit validation.
+
+```yaml
+default:
+  image:
+    repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+
+components:
+  frontend:
+    imageOverride:
+      tag: "52a8a76-frontend"
+
+  # Keep this upstream until custom image is validated
+  frontend-proxy:
+    imageOverride:
+      repository: ghcr.io/open-telemetry/demo
+      tag: "2.2.0-frontend-proxy"
+
+  # flagd main image is from open-feature, not open-telemetry/demo
+  flagd:
+    imageOverride:
+      repository: ghcr.io/open-feature/flagd
+      tag: "v0.12.9"
+```
+
+### Why this matters
+
+- `default.image.repository` also affects containers that do not have explicit per-container overrides.
+- Some components are multi-container pods (for example `flagd` + `flagd-ui` sidecar), so one missing tag can break pod readiness.
+- `helm --wait` fails the whole command if any pod is not Ready before timeout, even if most of the app is already healthy.
+
+### How to use only ACR images safely
+
+#### Option A: Build and push all required images
+
+Ensure every required tag exists in ACR before deploy:
+
+```bash
+# Example check
+az acr repository show-tags \
+  --name acrdevopsprojectd1e51ba4 \
+  --repository otel-demo \
+  --output tsv | sort
+```
+
+#### Option B: Mirror upstream images into ACR
+
+```bash
+# Mirror frontend-proxy
+az acr import \
+  --name acrdevopsprojectd1e51ba4 \
+  --source ghcr.io/open-telemetry/demo:2.2.0-frontend-proxy \
+  --image otel-demo:2.2.0-frontend-proxy
+
+# Mirror flagd-ui sidecar image
+az acr import \
+  --name acrdevopsprojectd1e51ba4 \
+  --source ghcr.io/open-telemetry/demo:2.2.0-flagd-ui \
+  --image otel-demo:2.2.0-flagd-ui
+
+# Mirror flagd main image to a dedicated repo path
+az acr import \
+  --name acrdevopsprojectd1e51ba4 \
+  --source ghcr.io/open-feature/flagd:v0.12.9 \
+  --image open-feature/flagd:v0.12.9
+```
+
+Then point values to those ACR repositories explicitly.
+
+### Pre-flight validation before deploy
+
+```bash
+# Render manifests locally (no cluster changes)
+helm template otel-demo open-telemetry/opentelemetry-demo \
+  --namespace otel-demo \
+  --values k8s/otel-demo/values.yaml > /tmp/otel-rendered.yaml
+
+# Deploy with wait
+helm upgrade --install otel-demo open-telemetry/opentelemetry-demo \
+  --namespace otel-demo \
+  --values k8s/otel-demo/values.yaml \
+  --wait \
+  --timeout 15m
+
+# Verify runtime image resolution
+kubectl get pod -n otel-demo -o jsonpath="{range .items[*]}{.metadata.name}{'\\n'}{range .spec.containers[*]}{'  '}{.name}{' => '}{.image}{'\\n'}{end}{end}"
+```
 
 ## 9.11 Useful Resources
 
@@ -806,3 +942,58 @@ These are actual problems encountered and resolved during setup. Each is a reali
     --entrypoint sh frontend
   ```
 - **Lesson:** Distroless images are great for production security but require a separate dev/builder stage for interactive work
+
+### L-011: Grafana ingress rejected by NGINX admission webhook
+
+- **Symptom:** Helm upgrade failed with `admission webhook "validate.nginx.ingress.kubernetes.io" denied the request`
+- **Root cause:** Grafana ingress used empty host + `/` path, conflicting with an existing ingress route
+- **Fix:** Disable Grafana ingress in monitoring values and use port-forward for access
+- **Lesson:** Ingress host+path combinations must be globally unique per controller scope
+
+### L-012: Helm timeout masked unschedulable DaemonSet pod
+
+- **Symptom:** `helm upgrade --wait --timeout 20m` timed out even though most workloads were healthy
+- **Root cause:** One `prometheus-node-exporter` DaemonSet pod stayed Pending, so Helm wait condition never completed
+- **Fix:** Temporarily disabled node exporter components:
+  - `nodeExporter.enabled: false`
+  - `prometheus-node-exporter.enabled: false`
+- **Lesson:** Helm wait failures are often scheduling/completeness issues, not only crashing pods
+
+### L-013: Grafana SQLite lock contention during startup
+
+- **Symptom:** Grafana repeatedly restarted with `database is locked (SQLITE_BUSY)` during migration/provisioning
+- **Root cause:** SQLite on a shared PVC is sensitive to concurrent access during rollout and startup migration windows
+- **Fix:**
+  - Keep single replica (`replicas: 1`)
+  - Use `deploymentStrategy.type: Recreate`
+  - Relax readiness/liveness timing for slow initialization
+- **Lesson:** SQLite is acceptable for small learning setups, but external DB is better for resilient production behavior
+
+### L-014: Prometheus Operator pre-upgrade hook pod stuck Pending
+
+- **Symptom:** Helm failed with `pre-upgrade hooks failed: timed out waiting for the condition`
+- **Root cause:** Admission hook job pod could not schedule:
+  - app nodes at pod limit (`30/30`)
+  - system node tainted `CriticalAddonsOnly`
+- **Fix (temporary):** Set `prometheusOperator.admissionWebhooks.patch.enabled: false` so upgrades do not block on hook jobs
+- **Fix (preferred):** Add app node capacity and re-enable patch hook
+- **Lesson:** Hook jobs also need scheduling headroom; they can block the full release lifecycle
+
+### L-015: Autoscaler enabled pool cannot be manually scaled
+
+- **Symptom:** `az aks nodepool scale` returned `Cannot scale cluster autoscaler enabled node pool`
+- **Root cause:** Manual scale command is disallowed while autoscaler is enabled
+- **Fix:** Either:
+  1. Update autoscaler bounds (`--min-count` / `--max-count`), or
+  2. Disable autoscaler, scale manually, then re-enable autoscaler
+- **Lesson:** Use nodepool update for autoscaled pools; use nodepool scale for non-autoscaled pools
+
+### L-016: Sweden Central vCPU quota exhaustion blocked scale-out
+
+- **Symptom:** `ErrCode_InsufficientVCPUQuota`, with `left regional vcpu quota 0`
+- **Root cause:** Subscription quota limit reached (`Total Regional vCPUs = 10/10`, `Standard BS Family vCPUs = 10/10`)
+- **Fix options:**
+  - Request quota increase for the region/VM family
+  - Temporarily free pod slots by scaling down non-critical workloads
+  - Keep webhook hook disabled until quota/headroom is available
+- **Lesson:** This is quota exhaustion, not cluster CPU/memory pressure and not necessarily transient region capacity shortage

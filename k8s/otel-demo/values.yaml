@@ -29,11 +29,12 @@ components:
 
   frontend-proxy:
     imageOverride:
-      tag: "52a8a76-frontend-proxy"
+      repository: ghcr.io/open-telemetry/demo
+      tag: "2.2.0-frontend-proxy"
     ingress:
       enabled: true
+      ingressClassName: nginx    # Modern approach (replaces deprecated annotation)
       annotations:
-        kubernetes.io/ingress.class: nginx
         nginx.ingress.kubernetes.io/ssl-redirect: "false"
       hosts:
         - host: ""          # empty = match all hosts (use IP directly in browser)
@@ -124,8 +125,8 @@ components:
 
   flagd:
     imageOverride:
-      repository: ghcr.io/open-telemetry/demo  # not in ACR — use public image
-      tag: "2.2.0-flagd-ui"
+      repository: ghcr.io/open-feature/flagd
+      tag: "v0.12.9"
 
   llm:
     enabled: false    # requires OpenAI API key — disable until configured

@@ -62,7 +62,8 @@ devops-aks-project/
 │   ├── 07-observability.md            ← OTel + Prometheus + Grafana
 │   ├── 08-testing-validation.md       ← Smoke tests + validation
 │   ├── 09-learning-notes.md           ← Key concepts and learnings
-│   └── 10-containerization-docker-compose-learning-lab.md  ← Hands-on Docker + Compose lab
+│   ├── 10-containerization-docker-compose-learning-lab.md  ← Hands-on Docker + Compose lab
+│   └── 11-helm-chart-learning.md      ← Helm chart structure + build guide
 ├── terraform/
 │   ├── main.tf
 │   ├── variables.tf
@@ -215,7 +216,7 @@ You authenticate GitHub Actions to Azure using **OIDC (OpenID Connect)** — no 
 
 ## Getting Started
 
-> Follow the docs in order from `01` to `08`, then use `09` and `10` as deep-dive learning references.
+> Follow the docs in order from `01` to `08`, then use `09`, `10`, and `11` as deep-dive learning references.
 
 ```bash
 # Clone this repo

@@ -1,0 +1,76 @@
+# k8s/monitoring/prometheus-values.yaml
+
+grafana:
+  enabled: true
+  admin:
+    existingSecret: grafana-admin-credentials
+    userKey: admin-user
+    passwordKey: admin-password
+  # adminPassword: "admin-change-me"   # Change this! Or use a K8s secret
+  replicas: 1
+  deploymentStrategy:
+    type: Recreate
+  ingress:
+    enabled: false
+    ingressClassName: nginx
+    hosts:
+      - ""    # Will use IP-based access
+  persistence:
+    enabled: true
+    storageClassName: managed-csi
+    size: 5Gi
+  # Grafana can take longer on first boot (DB migrations + dashboard provisioning).
+  # More tolerant probes prevent restart loops on small AKS nodes.
+  readinessProbe:
+    initialDelaySeconds: 30
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 12
+  livenessProbe:
+    initialDelaySeconds: 180
+    timeoutSeconds: 10
+    periodSeconds: 10
+    failureThreshold: 12
+
+prometheus:
+  prometheusSpec:
+    # Scrape interval
+    scrapeInterval: 30s
+    # Scrape OTel Collector metrics
+    additionalScrapeConfigs:
+      - job_name: otel-collector
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - otel-demo
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+    # PersistentVolumeClaim for metric retention
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: managed-csi
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+prometheusOperator:
+  admissionWebhooks:
+    patch:
+      enabled: true
+
+alertmanager:
+  enabled: true
+
+# AKS nodes in this cluster do not all carry the 'type' label used by the chart's
+# default affinity rule, which can leave one DaemonSet pod Pending forever.
+nodeExporter:
+  enabled: false
+
+prometheus-node-exporter:
+  enabled: false
