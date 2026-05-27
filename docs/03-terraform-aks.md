@@ -536,8 +536,11 @@ az aks get-credentials \
 
 # Grant your user cluster admin access (azure_rbac_enabled=true requires explicit Azure RBAC)
 AKS_ID=$(az aks show --resource-group rg-devops-aks --name aks-devops-project --query id -o tsv | tr -d '\r')
+
+USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+
 az role assignment create \
-  --assignee-object-id "<your-user-object-id>" \
+  --assignee-object-id "$USER_OBJECT_ID" \
   --assignee-principal-type User \
   --role "Azure Kubernetes Service RBAC Cluster Admin" \
   --scope "$AKS_ID"
@@ -581,18 +584,37 @@ kubectl get nodes --show-labels | grep workload-type
 > - Delete cluster entirely when not using for >1 week (`terraform destroy` then `terraform apply` to recreate in ~10 min)
 
 ```bash
-# Scale down app pool at end of session (system pool stays at 1 node)
+# ── SCALE DOWN (end of session) ──────────────────────────────────────────────
+# Autoscaler must be disabled before manual scaling to 0
+az aks nodepool update \
+  --resource-group rg-devops-aks \
+  --cluster-name aks-devops-project \
+  --name app \
+  --disable-cluster-autoscaler
+
 az aks nodepool scale \
   --resource-group rg-devops-aks \
   --cluster-name aks-devops-project \
   --name app --node-count 0
 
-# Scale back up when resuming
+# ── SCALE BACK UP (start of session) ─────────────────────────────────────────
 az aks nodepool scale \
   --resource-group rg-devops-aks \
   --cluster-name aks-devops-project \
   --name app --node-count 1
+
+# Re-enable autoscaler after scaling back up
+az aks nodepool update \
+  --resource-group rg-devops-aks \
+  --cluster-name aks-devops-project \
+  --name app \
+  --enable-cluster-autoscaler \
+  --min-count 1 \
+  --max-count 2
 ```
+
+> **Note:** `az aks nodepool scale` fails with "Cannot scale cluster autoscaler enabled node pool" if autoscaler is active.
+> Always disable autoscaler first, scale, then re-enable. This is a known AKS limitation.
 
 ---
 

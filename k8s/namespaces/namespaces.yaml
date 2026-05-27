@@ -1,0 +1,25 @@
+# k8s/namespaces/namespaces.yaml
+#otel-demo namespace for OpenTelemetry demo application
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel-demo
+  labels:
+    app.kubernetes.io/managed-by: helm
+    project: devops-aks-project
+---
+#monitoring namespace for monitoring tools like Prometheus and Grafana
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    project: devops-aks-project
+---
+#ingress-nginx namespace for NGINX Ingress Controller
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    project: devops-aks-project

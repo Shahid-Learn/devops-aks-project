@@ -1,0 +1,145 @@
+# k8s/otel-demo/values.yaml
+#
+# Overrides for the official opentelemetry-demo Helm chart.
+# Images pulled from ACR — 22 images pushed with git SHA 52a8a76.
+#
+# Tag format: <git-sha>-<service-name>  e.g. 52a8a76-frontend
+# Verify: az acr repository show-tags --name acrdevopsprojectd1e51ba4 --repository otel-demo --output tsv | sort
+#
+# Chart component names use kebab-case short names (accounting, ad, cart, frontend-proxy etc.)
+# Image override key is 'imageOverride', not 'image'
+
+# Global default: set shared registry (all custom images are in the same ACR repository)
+default:
+  image:
+    repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+    pullPolicy: IfNotPresent
+
+components:
+
+  frontend:
+    imageOverride:
+      tag: "52a8a76-frontend"
+    resources:
+      requests:
+        memory: "250Mi"
+        cpu: "100m"
+      limits:
+        memory: "400Mi"
+
+  frontend-proxy:
+    imageOverride:
+      repository: ghcr.io/open-telemetry/demo
+      tag: "2.2.0-frontend-proxy"
+    ingress:
+      enabled: true
+      ingressClassName: nginx    # Modern approach (replaces deprecated annotation)
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-redirect: "false"
+      hosts:
+        - host: ""          # empty = match all hosts (use IP directly in browser)
+          paths:
+            - path: /
+              pathType: Prefix
+              port: 8080
+
+  cart:
+    imageOverride:
+      tag: "52a8a76-cart"
+    resources:
+      requests:
+        memory: "160Mi"
+        cpu: "100m"
+      limits:
+        memory: "250Mi"
+
+  checkout:
+    imageOverride:
+      tag: "52a8a76-checkout"
+    resources:
+      requests:
+        memory: "150Mi"
+        cpu: "100m"
+      limits:
+        memory: "250Mi"
+
+  product-catalog:
+    imageOverride:
+      tag: "52a8a76-product-catalog"
+    resources:
+      requests:
+        memory: "60Mi"
+        cpu: "50m"
+      limits:
+        memory: "120Mi"
+
+  product-reviews:
+    imageOverride:
+      tag: "52a8a76-product-reviews"
+
+  recommendation:
+    imageOverride:
+      tag: "52a8a76-recommendation"
+
+  ad:
+    imageOverride:
+      tag: "52a8a76-ad"
+    resources:
+      requests:
+        memory: "300Mi"
+        cpu: "100m"
+      limits:
+        memory: "500Mi"
+
+  payment:
+    imageOverride:
+      tag: "52a8a76-payment"
+
+  shipping:
+    imageOverride:
+      tag: "52a8a76-shipping"
+
+  email:
+    imageOverride:
+      tag: "52a8a76-email"
+
+  currency:
+    imageOverride:
+      tag: "52a8a76-currency"
+
+  load-generator:
+    imageOverride:
+      tag: "52a8a76-load-generator"
+
+  fraud-detection:
+    imageOverride:
+      tag: "52a8a76-fraud-detection"
+
+  quote:
+    imageOverride:
+      tag: "52a8a76-quote"
+
+  accounting:
+    imageOverride:
+      tag: "52a8a76-accounting"
+
+  flagd:
+    imageOverride:
+      repository: ghcr.io/open-feature/flagd
+      tag: "v0.12.9"
+
+  llm:
+    enabled: false    # requires OpenAI API key — disable until configured
+    imageOverride:
+      tag: "52a8a76-llm"
+
+  image-provider:
+    imageOverride:
+      tag: "52a8a76-image-provider"
+
+  kafka:
+    imageOverride:
+      repository: acrdevopsprojectd1e51ba4.azurecr.io/otel-demo
+      tag: "52a8a76-kafka"
+
+  # jaeger, prometheus, grafana, postgresql, valkey-cart, opensearch use official public images — no override needed
