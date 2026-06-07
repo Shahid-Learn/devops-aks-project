@@ -122,6 +122,12 @@ components:
   accounting:
     imageOverride:
       tag: "52a8a76-accounting"
+    resources:
+      requests:
+        memory: "200Mi"
+        cpu: "100m"
+      limits:
+        memory: "350Mi"
 
   flagd:
     imageOverride:
@@ -143,3 +149,22 @@ components:
       tag: "52a8a76-kafka"
 
   # jaeger, prometheus, grafana, postgresql, valkey-cart, opensearch use official public images — no override needed
+
+# Point Jaeger's metrics view at kube-prometheus-stack instead of the bundled OTel demo Prometheus.
+# This means Jaeger's "Monitor" tab reads RED metrics from the same Prometheus that kube-prometheus-stack manages.
+# Note: extraEnv replaces (not merges) the chart defaults so all required vars must be listed here.
+jaeger:
+  jaeger:
+    extraEnv:
+      - name: MEMORY_MAX_TRACES
+        value: "25000"
+      - name: PROMETHEUS_ADDR
+        value: kube-prometheus-stack-prometheus.monitoring:9090   # changed from default prometheus:9090
+      - name: OTEL_COLLECTOR_HOST
+        value: otel-collector
+      - name: OTEL_COLLECTOR_PORT_HTTP
+        value: "4318"
+      - name: JAEGER_HOST
+        value: "0.0.0.0"
+      - name: JAEGER_GRPC_PORT
+        value: "4317"

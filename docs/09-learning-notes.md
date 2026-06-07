@@ -39,6 +39,10 @@
 - [L-014: Prometheus Operator pre-upgrade hook pod stuck Pending](#l-014-prometheus-operator-pre-upgrade-hook-pod-stuck-pending)
 - [L-015: Autoscaler enabled pool cannot be manually scaled](#l-015-autoscaler-enabled-pool-cannot-be-manually-scaled)
 - [L-016: Sweden Central vCPU quota exhaustion blocked scale-out](#l-016-sweden-central-vcpu-quota-exhaustion-blocked-scale-out)
+- [L-017: B-series capacity approval uncertainty changed node pool strategy](#l-017-b-series-capacity-approval-uncertainty-changed-node-pool-strategy)
+- [L-018: Node hit max pods even with free CPU/memory](#l-018-node-hit-max-pods-even-with-free-cpumemory)
+- [L-019: Jaeger ingress redirected in a loop](#l-019-jaeger-ingress-redirected-in-a-loop)
+- [L-020: DaemonSet pod Pending — freed slot by deleting a Deployment pod from the full node](#l-020-daemonset-pod-pending--freed-slot-by-deleting-a-deployment-pod-from-the-full-node)
 
 ---
 
@@ -997,3 +1001,58 @@ These are actual problems encountered and resolved during setup. Each is a reali
   - Temporarily free pod slots by scaling down non-critical workloads
   - Keep webhook hook disabled until quota/headroom is available
 - **Lesson:** This is quota exhaustion, not cluster CPU/memory pressure and not necessarily transient region capacity shortage
+
+### L-017: B-series capacity approval uncertainty changed node pool strategy
+
+- **Symptom:** Microsoft support indicated newer generation SKU quota requests are reviewed against regional capacity and are not guaranteed
+- **Root cause:** Sandbox plan depended on BS-family availability and approval timing, creating avoidable delivery risk
+- **Fix:** Standardized on a single app pool using `Standard_D2s_v5` with autoscaler bounds `min=2`, `max=4`
+- **Lesson:** For sandbox continuity, prefer VM families with already approved quota and predictable capacity over waiting on family-specific approvals
+
+### L-018: Node hit max pods even with free CPU/memory
+
+- **Symptom:** One DaemonSet pod stayed Pending with scheduler events showing `Too many pods` and `NodeAffinity`
+- **Root cause:** Target node reached allocatable pod limit (`30/30`). This limit is controlled by AKS node pool `maxPods` (kubelet), not by remaining CPU/memory
+- **Why this is confusing:** Other nodes can still have free pod slots, but a DaemonSet pod is tied to a specific node and cannot move to a different one
+- **Fix options:**
+  1. Free one pod slot on the target node (delete/evict a non-critical pod)
+  2. Scale out node pool so general workloads spread across more nodes
+  3. Increase node pool `maxPods` after validating subnet/IP capacity
+- **Useful checks:**
+  - `kubectl get pods -A -o custom-columns=NODE:.spec.nodeName --no-headers | sort | uniq -c`
+  - `kubectl get node <node> -o jsonpath='{.status.allocatable.pods}'`
+  - `az aks nodepool show -g <rg> --cluster-name <aks> -n <pool> --query maxPods -o tsv`
+- **Lesson:** Pod-density can be the bottleneck even when CPU and memory are not fully utilized
+
+### L-019: Jaeger ingress redirected in a loop
+
+- **Symptom:** Browser showed `ERR_TOO_MANY_REDIRECTS` when opening Jaeger at `/jaeger/ui`
+- **Root cause:** Ingress had `nginx.ingress.kubernetes.io/permanent-redirect: /jaeger/ui` on a `/jaeger` Prefix path. Requests to `/jaeger/ui` were also matched and redirected again to the same URL, creating a loop.
+- **Fix:** Remove the `permanent-redirect` annotation from `k8s/ingress/jaeger-ingress.yaml` and keep direct routing to the Jaeger service on port `16686`.
+- **Verification:**
+  - `curl -I http://<ingress-ip>/jaeger/ui` -> `307` to `/jaeger/ui/`
+  - `curl -L -o /dev/null -w 'code=%{http_code} redirects=%{num_redirects}\n' http://<ingress-ip>/jaeger/ui` -> `code=200 redirects=1`
+- **Lesson:** Be careful with blanket ingress redirect annotations on Prefix paths; they apply to subpaths too and can cause self-redirect loops.
+
+### L-020: DaemonSet pod Pending — freed slot by deleting a Deployment pod from the full node
+
+- **Symptom:** `otel-collector-agent-vdnzr` stayed Pending on `vmss000005` even after scaling the node pool to 3 nodes. Scheduler events showed `0/4 nodes available: 1 Too many pods, 3 NodeAffinity`.
+- **Root cause:** `vmss000005` was already at 39/40 pods (all Running — no wasted slots from Completed/Evicted pods). DaemonSet pods are pinned to their assigned node; the new `vmss000007` node got a fresh DaemonSet pod (`r6ssc`) but could not absorb the stuck pod on the full node.
+- **Why Cluster Autoscaler didn't help:** CA does not scale up for DaemonSet pending pods by design — adding a node would just spawn another DaemonSet pod, not resolve the stuck one.
+- **Fix:** Deleted the `accounting` Deployment pod from `vmss000005`:
+  ```bash
+  kubectl delete pod accounting-5dc65fd4f8-ztffs -n otel-demo
+  ```
+  - Kubernetes rescheduled `accounting` onto `vmss000007` (empty node)
+  - Freed one slot on `vmss000005`
+  - `otel-collector-agent-vdnzr` immediately scheduled and became Running
+- **How to find which node a pod is on:**
+  ```bash
+  # Count pods per node across all namespaces
+  kubectl get pods --all-namespaces -o wide | awk 'NR>1 {print $8}' | sort | uniq -c | sort -rn
+
+  # List all pods on a specific full node
+  kubectl get pods --all-namespaces -o wide --field-selector spec.nodeName=<node-name>
+  ```
+- **awk tip:** In `kubectl get pods -o wide`, `$7` is NODE. In `--all-namespaces` output, the columns shift right by one — `$8` is NODE (since `$1` becomes NAMESPACE).
+- **Lesson:** When a DaemonSet pod is stuck on a full node, delete a moveable Deployment pod from that specific node. The Deployment controller reschedules it elsewhere, freeing the slot for the DaemonSet.

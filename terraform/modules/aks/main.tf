@@ -55,18 +55,20 @@ resource "azurerm_kubernetes_cluster" "main" {
 # App node pool — runs your workloads
 resource "azurerm_kubernetes_cluster_node_pool" "app" {
   name                  = "app"
+  temporary_name_for_rotation = "approt"
   kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
   vm_size               = var.node_vm_size_app
+  max_pods              = var.node_pool_max_pods_app
   vnet_subnet_id        = var.subnet_id
   #   os_disk_size_gb       = 128
   mode = "User"
 
-  # Autoscaling — max 2 nodes is enough for learning
+  # Autoscaling profile for sandbox workloads
   # Note: azurerm 4.x renamed enable_auto_scaling → auto_scaling_enabled
   auto_scaling_enabled = true
-  min_count            = 1
-  max_count            = 2
-  node_count           = 1
+  min_count            = 2
+  max_count            = 4
+  node_count           = 2
   os_disk_size_gb      = 64 # Reduced from 128
 
   node_labels = {
@@ -74,6 +76,12 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [
+      node_count, # Allow cluster autoscaler to manage live node count
+    ]
+  }
 }
 
 # Grant AKS managed identity permission to pull from ACR

@@ -49,8 +49,8 @@ A **production-grade DevOps pipeline** that:
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                    AKS Cluster                                        │   │
 │  │                                                                      │   │
-│  │  System Node Pool            App Node Pool (autoscale 1-3)           │   │
-│  │  (2x D2s_v3)                 (D4s_v3)                                │   │
+│  │  System Node Pool            App Node Pool (autoscale 2-4)           │   │
+│  │  (1x B2ms)                   (D2s_v5)                                │   │
 │  │  ┌─────────────┐             ┌──────────────────────────────────┐    │   │
 │  │  │  CoreDNS    │             │  Namespace: otel-demo            │    │   │
 │  │  │  metrics    │             │  ┌──────────────────────────┐    │    │   │
@@ -173,4 +173,4 @@ A: Azure activity logs will show API calls from the GitHub Actions service princ
 A: Contributor role on a resource group is sufficient for this project. You also need the ability to create Service Principals (Application Administrator in Azure AD, or equivalent).
 
 **Q: Can I do this from a free Azure account?**
-A: AKS requires Standard_D2s_v3 VMs which are not available in the free tier. You need a Pay-As-You-Go or Visual Studio subscription. Estimated cost: ~$10-15/day while the cluster is running, less than $1/day when scaled down.
+A: AKS requires paid VM SKUs (for this project profile: Standard_B2ms + Standard_D2s_v5), which are not available in the free tier. You need a Pay-As-You-Go or Visual Studio subscription. Estimated cost depends on autoscaler range and uptime.

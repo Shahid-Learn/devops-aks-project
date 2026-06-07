@@ -1,0 +1,136 @@
+{
+  "version": 4,
+  "terraform_version": "1.15.2",
+  "serial": 59,
+  "lineage": "4af48246-73cb-c080-f3ee-ebb9d16cda99",
+  "outputs": {
+    "acr_login_server": {
+      "value": "acrdevopsprojectd1e51ba4.azurecr.io",
+      "type": "string"
+    },
+    "aks_cluster_endpoint": {
+      "value": "https://aks-devops-project-irdw53b7.hcp.swedencentral.azmk8s.io:443",
+      "type": "string",
+      "sensitive": true
+    },
+    "aks_cluster_name": {
+      "value": "aks-devops-project",
+      "type": "string"
+    },
+    "get_credentials_command": {
+      "value": "az aks get-credentials --resource-group rg-devops-aks --name aks-devops-project --overwrite-existing",
+      "type": "string"
+    },
+    "keyvault_uri": {
+      "value": "https://kv-devops-aks-ee128e.vault.azure.net/",
+      "type": "string"
+    },
+    "oidc_issuer_url": {
+      "value": "https://swedencentral.oic.prod-aks.azure.com/5581c9a8-168b-45f0-abd4-d375da99bf9f/2c50b515-06bc-4e41-afb1-ba1e67aef637/",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "mode": "data",
+      "type": "azurerm_client_config",
+      "name": "current",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "client_id": "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+            "id": "Y2xpZW50Q29uZmlncy9jbGllbnRJZD0wNGIwNzc5NS04ZGRiLTQ2MWEtYmJlZS0wMmY5ZTFiZjdiNDY7b2JqZWN0SWQ9M2NiYTVmZTYtNzg4Yi00ZjFiLTg1MzItNTA0NzQ1NzUzMmQ0O3N1YnNjcmlwdGlvbklkPTQ5NTBlNGZkLTlhMzgtNGM2OS04ZDgxLWNmY2JkNDdmNjlhMTt0ZW5hbnRJZD01NTgxYzlhOC0xNjhiLTQ1ZjAtYWJkNC1kMzc1ZGE5OWJmOWY=",
+            "object_id": "3cba5fe6-788b-4f1b-8532-5047457532d4",
+            "subscription_id": "4950e4fd-9a38-4c69-8d81-cfcbd47f69a1",
+            "tenant_id": "5581c9a8-168b-45f0-abd4-d375da99bf9f",
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "azurerm_resource_group",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "/subscriptions/4950e4fd-9a38-4c69-8d81-cfcbd47f69a1/resourceGroups/rg-devops-aks",
+            "location": "swedencentral",
+            "managed_by": "",
+            "name": "rg-devops-aks",
+            "tags": {
+              "environment": "learning",
+              "managed_by": "manual",
+              "project": "devops-aks-project"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "module": "module.acr",
+      "mode": "managed",
+      "type": "azurerm_container_registry",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/azurerm\"]",
+      "instances": [
+        {
+          "schema_version": 2,
+          "attributes": {
+            "admin_enabled": false,
+            "admin_password": "",
+            "admin_username": "",
+            "anonymous_pull_enabled": false,
+            "data_endpoint_enabled": false,
+            "data_endpoint_host_names": [],
+            "encryption": [],
+            "export_policy_enabled": true,
+            "georeplications": [],
+            "id": "/subscriptions/4950e4fd-9a38-4c69-8d81-cfcbd47f69a1/resourceGroups/rg-devops-aks/providers/Microsoft.ContainerRegistry/registries/acrdevopsprojectd1e51ba4",
+            "identity": [],
+            "location": "swedencentral",
+            "login_server": "acrdevopsprojectd1e51ba4.azurecr.io",
+            "name": "acrdevopsprojectd1e51ba4",
+            "network_rule_bypass_option": "AzureServices",
+            "network_rule_set": [],
+            "public_network_access_enabled": true,
+            "quarantine_policy_enabled": false,
+            "resource_group_name": "rg-devops-aks",
+            "retention_policy_in_days": 0,
+            "sku": "Basic",
+            "tags": {
+              "environment": "learning",
+              "managed_by": "terraform",
+              "project": "devops-aks-project"
+            },
+            "timeouts": null,
+            "trust_policy_enabled": false,
+            "zone_redundancy_enabled": false
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "admin_password"
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxODAwMDAwMDAwMDAwLCJkZWxldGUiOjE4MDAwMDAwMDAwMDAsInJlYWQiOjMwMDAwMDAwMDAwMCwidXBkYXRlIjoxODAwMDAwMDAwMDAwfSwic2NoZW1hX3ZlcnNpb24iOiIyIn0="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
+

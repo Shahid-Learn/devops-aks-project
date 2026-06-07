@@ -124,13 +124,23 @@ service:
 
 ## 7.3 Accessing Observability Tools
 
+### Routing note (monitoring ingress paths)
+
+- The public ingress IP belongs to the NGINX ingress controller.
+- Grafana is exposed from the monitoring stack on `/grafana`.
+- Prometheus is exposed from the monitoring stack on `/prometheus`.
+- Jaeger UI is exposed from the `otel-demo` namespace on `/jaeger/ui` via `k8s/ingress/jaeger-ingress.yaml`.
+- `k8s/ingress/jaeger-ingress.yaml` must not use `nginx.ingress.kubernetes.io/permanent-redirect` for this route. It causes a redirect loop when `/jaeger/ui` is also matched by the same ingress rule.
+- Monitoring routes are configured in `k8s/monitoring/prometheus-values.yaml` and the Jaeger route in `k8s/ingress/jaeger-ingress.yaml`.
+
 ```bash
 # Option 1: Direct access via Ingress (if configured)
 INGRESS_IP=$(kubectl get service ingress-nginx-controller \
   -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 
-echo "Jaeger UI:   http://$INGRESS_IP/jaeger"
+echo "Jaeger UI:   http://$INGRESS_IP/jaeger/ui"
 echo "Grafana:     http://$INGRESS_IP/grafana"
+echo "Prometheus:  http://$INGRESS_IP/prometheus/"
 
 # Option 2: Port-forward (simpler for learning)
 
@@ -150,6 +160,13 @@ echo "Prometheus: http://localhost:9090"
 kubectl port-forward -n otel-demo svc/otel-demo-frontendproxy 8080:8080 &
 echo "Astronomy Shop: http://localhost:8080"
 ```
+
+Expected HTTP behavior on ingress:
+
+- `http://<INGRESS_IP>/grafana/` returns `302` to `/grafana/login`
+- `http://<INGRESS_IP>/prometheus/` returns `302` to `/prometheus/query`
+- `http://<INGRESS_IP>/jaeger/ui` returns `307` to `/jaeger/ui/`, then `200`
+- `http://<INGRESS_IP>/jaeger` may return `404` and is not the canonical URL
 
 ---
 
@@ -205,6 +222,14 @@ curl -s -X POST \
 
 ## 7.5 Jaeger — Distributed Tracing
 
+### Jaeger Metrics Backend Override (Important)
+
+When changing Jaeger's `PROMETHEUS_ADDR` through Helm values, remember that `jaeger.jaeger.extraEnv` is a list and Helm replaces the full list instead of merging list entries.
+
+If you set only `PROMETHEUS_ADDR`, Jaeger can crash because required defaults are dropped (for example `MEMORY_MAX_TRACES`, `JAEGER_HOST`, `JAEGER_GRPC_PORT`, `OTEL_COLLECTOR_HOST`, `OTEL_COLLECTOR_PORT_HTTP`).
+
+Keep all required env vars in the override block and only change the `PROMETHEUS_ADDR` value.
+
 ### What to Look For
 
 Open Jaeger UI at http://localhost:16686:
@@ -257,6 +282,53 @@ sum(rate(container_cpu_usage_seconds_total{namespace="otel-demo"}[5m])) by (pod)
 # Memory usage per pod
 sum(container_memory_working_set_bytes{namespace="otel-demo"}) by (pod)
 ```
+
+### 7.6.1 How OTel Collector Targets Are Selected
+
+This project scrapes OTel metrics from `otel-collector-agent` pods using Kubernetes pod service discovery (`role: pod`) and relabel filters.
+
+Configured selectors in [k8s/monitoring/prometheus-values.yaml](../k8s/monitoring/prometheus-values.yaml):
+
+```yaml
+additionalScrapeConfigs:
+  - job_name: otel-collector
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - otel-demo
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_label_component]
+        action: keep
+        regex: opentelemetry-collector;agent-collector
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: metrics
+```
+
+Why this matters:
+
+- The OTel app pods (such as `ad`, `checkout`, `frontend`) are not scraped directly by Prometheus.
+- They push telemetry to the collector via OTLP (`:4317` / `:4318`).
+- Prometheus scrapes only the collector metrics endpoint (`:8888`, port name `metrics`).
+- Annotation-only filtering (`prometheus.io/scrape=true`) does not match these collector-agent pods in this deployment.
+
+Quick checks:
+
+```bash
+# Collector agent pods that match label filters
+kubectl get pods -n otel-demo \
+  -l 'app.kubernetes.io/name=opentelemetry-collector,component=agent-collector'
+
+# Confirm metrics port is present
+kubectl describe pod -n otel-demo <collector-agent-pod> | grep '(metrics)'
+
+# Prometheus targets UI
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+# Open http://localhost:9090/targets and filter job=otel-collector
+```
+
+To include another namespace, add it under `namespaces.names` for the same job, or create a second `job_name` block for clearer separation.
 
 ---
 
@@ -356,7 +428,7 @@ for i in {1..20}; do
 done
 
 # 2. Check OTel Collector is processing telemetry
-kubectl logs -n otel-demo -l app.kubernetes.io/name=otelcol --tail=50
+kubectl logs -n otel-demo -l app.kubernetes.io/name=opentelemetry-collector --tail=50
 
 # 3. Check Jaeger has traces
 curl -s "http://localhost:16686/api/services" | jq '.data[]'
