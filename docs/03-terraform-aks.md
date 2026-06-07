@@ -15,7 +15,7 @@ Azure Resource Group: rg-devops-aks
 │
 ├── AKS Cluster
 │   ├── System node pool (Standard_B2ms × 1)   ← cost-optimised for learning
-│   ├── App node pool   (Standard_B4ms × 1–2, autoscale)
+│   ├── App node pool   (Standard_D2s_v5 × 2–4, autoscale)
 │   ├── OIDC Issuer enabled
 │   ├── Workload Identity enabled
 │   └── Managed Identity (for ACR pull)
@@ -134,13 +134,13 @@ variable "acr_name" {
 
 variable "node_vm_size_system" {
   type        = string
-  default     = "Standard_B2ms"   # Burstable — cheaper for learning; upgrade to D2s_v3 for prod
+  default     = "Standard_B2ms"   # Burstable — cheaper for learning; upgrade to D2s_v5 for prod
   description = "VM size for system node pool"
 }
 
 variable "node_vm_size_app" {
   type        = string
-  default     = "Standard_B4ms"   # Burstable — 4 CPU / 16 GB, enough for all OTel demo services
+  default     = "Standard_D2s_v5" # General purpose — stable performance and better regional availability
   description = "VM size for app node pool"
 }
 
@@ -380,12 +380,12 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
   os_disk_size_gb       = 128
   mode                  = "User"
 
-  # Autoscaling — max 2 nodes is enough for learning
+  # Autoscaling profile for sandbox workloads
   # Note: azurerm 4.x renamed enable_auto_scaling → auto_scaling_enabled
   auto_scaling_enabled = true
-  min_count            = 1
-  max_count            = 2
-  node_count           = 1
+  min_count            = 2
+  max_count            = 4
+  node_count           = 2
   os_disk_size_gb      = 64   # Reduced from 128
 
   node_labels = {
@@ -394,6 +394,31 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
 
   tags = var.tags
 }
+
+  > **Pod Density Note (AKS):**
+  > - The per-node pod limit is controlled by node pool `maxPods` (kubelet setting).
+  > - A node can hit `Too many pods` even when CPU/memory still looks available.
+  > - In this project, app nodes showed allocatable `30` pods per node.
+  >
+  > Check current value:
+  >
+  > ```bash
+  > az aks nodepool show \
+  >   --resource-group rg-devops-aks \
+  >   --cluster-name aks-devops-project \
+  >   --name app \
+  >   --query maxPods -o tsv
+  > ```
+  >
+  > If needed, update with subnet/IP planning in mind (Azure CNI assigns pod IPs):
+  >
+  > ```bash
+  > az aks nodepool update \
+  >   --resource-group rg-devops-aks \
+  >   --cluster-name aks-devops-project \
+  >   --name app \
+  >   --max-pods 50
+  > ```
 
 # Grant AKS managed identity permission to pull from ACR
 resource "azurerm_role_assignment" "aks_acr_pull" {
@@ -562,25 +587,25 @@ kubectl get nodes --show-labels | grep workload-type
 | Resource | SKU | Approx. Monthly Cost |
 |---------|-----|---------------------|
 | AKS System pool (1× B2ms) | Standard_B2ms | ~$60 |
-| AKS App pool (1–2× B4ms) | Standard_B4ms | ~$121–$242 |
+| AKS App pool (2–4× D2s_v5) | Standard_D2s_v5 | ~$60–$120 |
 | ACR | Basic | ~$5 |
 | Load Balancer | Standard | ~$18 |
 | Storage (TF state) | LRS | ~$1 |
 | Key Vault | Standard | ~$4 |
-| **Total (1 app node)** | | **~$209/month** |
-| **Total (scaled to 0 app)** | | **~$88/month** |
+| **Total (min app pool size = 2)** | | **~$148/month** |
+| **Total (max app pool size = 4)** | | **~$208/month** |
 
-### If upgrading to D-series (production-like)
+### If upgrading to higher-capacity D-series
 
 | Resource | SKU | Approx. Monthly Cost |
 |---------|-----|---------------------|
-| AKS System pool (2× D2s_v3) | Standard_D2s_v3 | ~$134 |
-| AKS App pool (1–3× D4s_v3) | Standard_D4s_v3 | ~$134–$402 |
-| **Total (min)** | | **~$296/month** |
+| AKS System pool (2× D2s_v5) | Standard_D2s_v5 | ~$120 |
+| AKS App pool (1–3× D4s_v5) | Standard_D4s_v5 | ~$120–$360 |
+| **Total (min)** | | **~$240/month** |
 
 > **Cost Saving Tips:**
-> - **Scale app pool to 0 after each learning session** — biggest saving
-> - B-series VMs burst CPU on demand and are idle-cheap — ideal for dev
+> - Keep autoscaler at min 2 / max 4 during active learning to avoid scheduling bottlenecks
+> - D-series gives predictable CPU and avoids dependency on BS-family quota approvals
 > - Delete cluster entirely when not using for >1 week (`terraform destroy` then `terraform apply` to recreate in ~10 min)
 
 ```bash

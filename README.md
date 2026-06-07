@@ -63,7 +63,8 @@ devops-aks-project/
 │   ├── 08-testing-validation.md       ← Smoke tests + validation
 │   ├── 09-learning-notes.md           ← Key concepts and learnings
 │   ├── 10-containerization-docker-compose-learning-lab.md  ← Hands-on Docker + Compose lab
-│   └── 11-helm-chart-learning.md      ← Helm chart structure + build guide
+│   ├── 11-helm-chart-learning.md      ← Helm chart structure + build guide
+│   └── 12-k9s-quickstart.md           ← K9s commands quickstart for AKS operations
 ├── terraform/
 │   ├── main.tf
 │   ├── variables.tf
@@ -102,9 +103,9 @@ devops-aks-project/
 |-------|---------------|-----------|
 | Environment | WSL2 + Docker engine (no Docker Desktop), az CLI, kubectl v1.35.0, Terraform, Helm | WSL DNS fixed (resolv.conf + wsl.conf); Docker daemon hardened to Unix socket only |
 | Azure / GitHub | Service Principal `sp-github-actions-aks`, OIDC federation for main + PR, GitHub Actions vars/secrets configured | No long-lived credentials stored |
-| Terraform | AKS v1.35.3 provisioned (2 nodes: system B2ms + app B4ms×1-2), VNet 10.0.0.0/16, service CIDR 10.1.0.0/16, ACR (Basic), Key Vault | State in Azure Blob Storage; OIDC + Workload Identity enabled |
+| Terraform | AKS v1.35.3 profile updated (system B2ms + app D2s_v5 autoscale 2-4), VNet 10.0.0.0/16, service CIDR 10.1.0.0/16, ACR (Basic), Key Vault | State in Azure Blob Storage; OIDC + Workload Identity enabled |
 | ACR | 22 OTel Demo service images built and pushed | Registry: `acrdevopsprojectd1e51ba4.azurecr.io`, repository: `otel-demo`, tag: `52a8a76` (git SHA) |
-| Docs | Sections 00–10 authored + PRE-ACR-BUILD-CHECKLIST integrated; corporate Zscaler/TLS guidance added | Section 10 = 680-line hands-on Docker/Compose learning lab |
+| Docs | Sections 00–12 authored + PRE-ACR-BUILD-CHECKLIST integrated; corporate Zscaler/TLS guidance added | Section 10 = Docker/Compose lab, Section 12 = K9s quickstart |
 | Cost optimisation | AKS deleted after image push to avoid ~$60/day charge | ACR retained (~$5/month); Terraform state backend intact |
 
 ### 🔜 In Progress / Next Steps

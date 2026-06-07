@@ -1,0 +1,32 @@
+# k8s/ingress/jaeger-ingress.yaml
+#
+# Dedicated ingress for Jaeger UI in the otel-demo namespace.
+# Exposes Jaeger at http://<INGRESS_IP>/jaeger
+#
+# Jaeger query serves its UI at base_path=/jaeger/ui (configured in chart values.yaml).
+# NGINX rewrites the path so requests to /jaeger are forwarded correctly.
+#
+# Apply:
+#   kubectl apply -f k8s/ingress/jaeger-ingress.yaml
+#
+# Access:
+#   http://<INGRESS_IP>/jaeger
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger
+  namespace: otel-demo
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /jaeger
+            pathType: Prefix
+            backend:
+              service:
+                name: jaeger
+                port:
+                  number: 16686

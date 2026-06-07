@@ -35,14 +35,20 @@ variable "acr_name" {
 
 variable "node_vm_size_system" {
   type        = string
-  default     = "Standard_B2ms" # Burstable — cheaper for learning; upgrade to D2s_v3 for prod
+  default     = "Standard_B2ms" # Burstable — cheaper for learning; upgrade to D2s_v5 for prod
   description = "VM size for system node pool"
 }
 
 variable "node_vm_size_app" {
   type        = string
-  default     = "Standard_B4ms" # Burstable — 4 CPU / 16 GB, enough for all OTel demo services
+  default     = "Standard_D2s_v5" # General purpose — stable performance and better regional availability
   description = "VM size for app node pool"
+}
+
+variable "node_pool_max_pods_app" {
+  type        = number
+  default     = 40
+  description = "Maximum pods per node for the AKS app node pool"
 }
 
 variable "tags" {

@@ -617,6 +617,9 @@ grafana:
 
 EOF
 
+# Create Grafana admin secret used by existingSecret in values.yaml
+kubectl apply -f k8s/monitoring/grafana-admin-secret.yaml
+
 # Install
 helm upgrade --install kube-prometheus-stack \
   prometheus-community/kube-prometheus-stack \
@@ -661,7 +664,7 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:909
 
 ```bash
 # Get Grafana admin password
-kubectl get secret -n monitoring kube-prometheus-stack-grafana \
+kubectl get secret -n monitoring grafana-admin-credentials \
   -o jsonpath="{.data.admin-password}" | base64 -d ; echo
 
 # Port-forward to Grafana
@@ -723,7 +726,7 @@ INGRESS_IP=$(kubectl get service ingress-nginx-controller \
 echo "=== Application URLs ==="
 echo "OTel Astronomy Shop:  http://$INGRESS_IP"
 echo "Grafana:              http://$INGRESS_IP/grafana  (or port-forward)"
-echo "Jaeger:               http://$INGRESS_IP/jaeger   (or port-forward)"
+echo "Jaeger:               http://$INGRESS_IP/jaeger/ui   (or port-forward)"
 
 # Port-forward as alternative
 kubectl port-forward -n otel-demo svc/otel-demo-frontendproxy 8080:8080 &
@@ -793,11 +796,11 @@ data:
 
 #### Secret Example: Grafana Admin Password
 
-The kube-prometheus-stack Helm chart auto-generates a random admin password and stores it as a Secret:
+In this project, Grafana reads admin credentials from a pre-created Secret (`grafana-admin-credentials`) referenced by `existingSecret` in the values file:
 
 ```bash
 # Query the secret (base64 encoded)
-kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+kubectl -n monitoring get secret grafana-admin-credentials \
   -o jsonpath="{.data.admin-password}" | base64 -d
 
 # Secret is stored in etcd, encrypted if enabled
@@ -935,6 +938,55 @@ All ConfigMaps and Secrets are stored in **etcd** (Kubernetes' database):
    - HashiCorp Vault
    - Sealed Secrets
 
+### Next Step in This Project: Add One ConfigMap + One Secret
+
+Use this as the immediate follow-up exercise after section 5.5.
+
+1. Create a non-sensitive runtime ConfigMap manifest:
+
+```bash
+kubectl -n otel-demo create configmap app-runtime-config \
+  --from-literal=LOG_LEVEL=info \
+  --from-literal=FEATURE_RECOMMENDATIONS=true \
+  --dry-run=client -o yaml > k8s/secrets/app-runtime-config.yaml
+```
+
+2. Create a sensitive Secret manifest (development sample):
+
+```bash
+kubectl -n otel-demo create secret generic app-runtime-secrets \
+  --from-literal=API_TOKEN=replace-me \
+  --dry-run=client -o yaml > k8s/secrets/app-runtime-secrets.yaml
+```
+
+3. Apply both manifests:
+
+```bash
+kubectl apply -f k8s/secrets/app-runtime-config.yaml
+kubectl apply -f k8s/secrets/app-runtime-secrets.yaml
+```
+
+4. Inject values into a real deployment from this cluster (`frontend`):
+
+```bash
+kubectl -n otel-demo set env deployment/frontend --from=configmap/app-runtime-config
+kubectl -n otel-demo set env deployment/frontend --from=secret/app-runtime-secrets
+kubectl rollout status -n otel-demo deployment/frontend
+```
+
+5. Verify the pod received values:
+
+```bash
+kubectl -n otel-demo get configmap app-runtime-config -o yaml
+kubectl -n otel-demo get secret app-runtime-secrets -o yaml
+kubectl -n otel-demo describe deployment frontend | grep -A8 "Environment"
+```
+
+Notes:
+- Use ConfigMap for non-sensitive settings only.
+- Use Secret for sensitive values; rotate them regularly.
+- Keep generated secret manifests out of source control for real environments.
+
 ---
 
 ### Option 1: Simple Secrets (Development Only)
@@ -954,7 +1006,7 @@ kubectl -n otel-demo get secrets
 kubectl -n otel-demo get secret database-config -o yaml
 
 # Reference in pod
-kubectl -n otel-demo set env deployment/otel-demo-cartservice \
+kubectl -n otel-demo set env deployment/cart \
   --from=secret/database-config
 ```
 
@@ -1021,7 +1073,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: otel-demo-cartservice
+  name: cart
   namespace: otel-demo
 spec:
   template:
@@ -1187,7 +1239,7 @@ kubectl -n monitoring get pods
 # Grafana takes longer due to SQLite migrations — may see 2/3 ready briefly
 
 # Get Grafana admin password
-kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+kubectl -n monitoring get secret grafana-admin-credentials \
   -o jsonpath="{.data.admin-password}" | base64 -d
 
 # Check all services (internal ClusterIP only, no external access)
