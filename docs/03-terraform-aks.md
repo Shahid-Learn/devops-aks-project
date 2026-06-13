@@ -346,6 +346,11 @@ resource "azurerm_kubernetes_cluster" "main" {
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
+  # Important: this only enables the AKS OIDC/WI platform.
+  # It does NOT create a User Assigned Managed Identity (UAMI) for your pods.
+  # You must create a UAMI separately and bind it to a Kubernetes ServiceAccount
+  # using a federated credential.
+
   # Network config
   # VNet: 10.0.0.0/16, AKS subnet: 10.0.0.0/22
   # Service CIDR must not overlap with any subnet — use a separate range

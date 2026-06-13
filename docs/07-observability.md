@@ -170,6 +170,88 @@ Expected HTTP behavior on ingress:
 
 ---
 
+## 7.3.1 Where Prometheus Scrape Targets Are Defined
+
+Understanding this is essential — targets come from **two separate mechanisms** that the Prometheus Operator merges at runtime.
+
+### The two mechanisms
+
+| Mechanism | Where defined | Who creates it | Examples in this project |
+|---|---|---|---|
+| **ServiceMonitors** (CRDs) | Auto-created by `kube-prometheus-stack` Helm chart | Prometheus Operator | alertmanager, grafana, apiserver, kubelet, node-exporter, kube-state-metrics, coredns, etcd, scheduler |
+| **additionalScrapeConfigs** | `k8s/monitoring/prometheus-values.yaml` | You (manual) | `otel-collector` job |
+
+### How they become active
+
+```
+k8s/monitoring/prometheus-values.yaml       kubectl get servicemonitors -n monitoring
+  prometheus.prometheusSpec                  (auto-created by chart install)
+    additionalScrapeConfigs:              +   serviceMonitor/monitoring/kube-prometheus-stack-*
+      - job_name: otel-collector                  alertmanager, grafana, kubelet,
+        ...                                        node-exporter, kube-state-metrics ...
+              │                                          │
+              └──────── Prometheus Operator ─────────────┘
+                                │
+                  Builds a compressed Secret:
+                  prometheus-kube-prometheus-stack-prometheus
+                  (namespace: monitoring)
+                                │
+                  Prometheus pod mounts and reads it
+                                │
+                  Targets visible at /targets in web UI
+```
+
+### Verify what is actually loaded
+
+```bash
+# 1. See all job names in the generated config (fastest check)
+kubectl get secret prometheus-kube-prometheus-stack-prometheus -n monitoring \
+  -o jsonpath='{.data.prometheus\.yaml\.gz}' | base64 -d | gunzip | grep "^- job_name:"
+
+# 2. Full config for a specific job
+kubectl get secret prometheus-kube-prometheus-stack-prometheus -n monitoring \
+  -o jsonpath='{.data.prometheus\.yaml\.gz}' | base64 -d | gunzip \
+  | grep -A 15 "job_name: otel-collector"
+
+# 3. Live target status (requires port-forward)
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090 &
+# http://localhost:9090/targets     — shows UP / DOWN per target
+# http://localhost:9090/config      — shows full merged config
+
+# 4. List all ServiceMonitors (what feeds the auto-targets)
+kubectl get servicemonitors -n monitoring
+
+# 5. List all PrometheusRule CRDs (alert rules)
+kubectl get prometheusrules -n monitoring
+```
+
+### What your project's targets look like
+
+Running the secret decode in this project shows these `job_name` entries:
+
+| Job name | Source | What it scrapes |
+|---|---|---|
+| `serviceMonitor/monitoring/kube-prometheus-stack-alertmanager/*` | ServiceMonitor (auto) | Alertmanager metrics |
+| `serviceMonitor/monitoring/kube-prometheus-stack-grafana/*` | ServiceMonitor (auto) | Grafana self-metrics |
+| `serviceMonitor/monitoring/kube-prometheus-stack-apiserver/*` | ServiceMonitor (auto) | Kubernetes API server |
+| `serviceMonitor/monitoring/kube-prometheus-stack-kubelet/*` | ServiceMonitor (auto) | Kubelet + cAdvisor (container metrics) |
+| `serviceMonitor/monitoring/kube-prometheus-stack-kube-state-metrics/*` | ServiceMonitor (auto) | Pod/deployment status metrics |
+| `serviceMonitor/monitoring/kube-prometheus-stack-prometheus-node-exporter/*` | ServiceMonitor (auto) | Node CPU, memory, disk |
+| `serviceMonitor/monitoring/kube-prometheus-stack-coredns/*` | ServiceMonitor (auto) | DNS resolution metrics |
+| `serviceMonitor/monitoring/kube-prometheus-stack-prometheus/*` | ServiceMonitor (auto) | Prometheus self-metrics |
+| `serviceMonitor/monitoring/kube-prometheus-stack-operator/*` | ServiceMonitor (auto) | Operator self-metrics |
+| `otel-collector` | **additionalScrapeConfigs** in `prometheus-values.yaml` | OTel Collector agent metrics from `otel-demo` namespace |
+
+### Recommended approach for this project
+
+**Use `additionalScrapeConfigs` for your own app scrape jobs** (like `otel-collector`). Reserve `ServiceMonitors` for cases where a Helm chart provides one (e.g. when an app chart ships its own ServiceMonitor CRD).
+
+The OTel demo chart does **not** ship a ServiceMonitor, so `additionalScrapeConfigs` with pod label matching is the right approach here. Annotation-based scraping (`prometheus.io/scrape=true`) is not used because the OTel demo pods do not set those annotations.
+
+To add a new scrape job (e.g. for another app in a different namespace), add another block under `additionalScrapeConfigs` in [`k8s/monitoring/prometheus-values.yaml`](../k8s/monitoring/prometheus-values.yaml) and run `helm upgrade`.
+
+---
+
 ## 7.4 Grafana Setup
 
 ### Login and Initial Setup

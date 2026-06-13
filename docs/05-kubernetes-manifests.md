@@ -533,38 +533,69 @@ But managing three separate Helm releases is more work. The single-chart approac
 # Add repo
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
+```
 
-# Create values file for Prometheus stack
-cat > k8s/monitoring/prometheus-values.yaml <<'EOF'
+The values file is already in the repository at `k8s/monitoring/prometheus-values.yaml`. Its current contents:
+
+```yaml
 # k8s/monitoring/prometheus-values.yaml
-#
-# This file configures the kube-prometheus-stack Helm chart.
-# It includes config for: Prometheus, Grafana, Alertmanager, Node Exporter, Kube-State-Metrics
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GRAFANA — Web UI for visualizing metrics
-# ─────────────────────────────────────────────────────────────────────────────
 grafana:
   enabled: true
-  adminPassword: "admin-change-me"   # Change this! Or use a K8s secret
+  admin:
+    existingSecret: grafana-admin-credentials  # Pre-create this secret — never use plaintext adminPassword
+    userKey: admin-user
+    passwordKey: admin-password
+
+  replicas: 1
+  deploymentStrategy:
+    type: Recreate  # Avoids SQLite lock contention during restarts (see L-013)
   ingress:
     enabled: true
+    ingressClassName: nginx
     annotations:
-      kubernetes.io/ingress.class: nginx
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
     hosts:
-      - ""    # Will use IP-based access; no hostname needed for learning
+      - ""    # Use ingress IP directly; no hostname needed for learning
+    path: /grafana
+    pathType: Prefix
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/grafana/"
+      serve_from_sub_path: true  # Required when Grafana is served on a sub-path
+  persistence:
+    enabled: true
+    storageClassName: managed-csi
+    size: 5Gi
+  # More tolerant probes prevent restart loops on small AKS nodes during slow first boot
+  readinessProbe:
+    initialDelaySeconds: 30
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 12
+  livenessProbe:
+    initialDelaySeconds: 180
+    timeoutSeconds: 10
+    periodSeconds: 10
+    failureThreshold: 12
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PROMETHEUS — Metrics database + alert rule engine
-# ─────────────────────────────────────────────────────────────────────────────
 prometheus:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    hosts:
+      - ""
+    paths:
+      - /prometheus
+    pathType: Prefix
   prometheusSpec:
-    # Scrape interval: How often Prometheus polls metric endpoints
+    routePrefix: /prometheus  # Required when exposing Prometheus on a sub-path via ingress
     scrapeInterval: 30s
-    
-    # Tell Prometheus about the OTel Collector in the otel-demo namespace
-    # This config scrapes metrics from pods annotated with:
-    #   prometheus.io/scrape: "true"
+    # Scrape OTel Collector agent metrics from otel-demo namespace.
+    # Uses pod label matching instead of prometheus.io/scrape annotations —
+    # the OTel demo chart does not add those annotations by default.
     additionalScrapeConfigs:
       - job_name: otel-collector
         kubernetes_sd_configs:
@@ -573,65 +604,64 @@ prometheus:
               names:
                 - otel-demo
         relabel_configs:
-          # Only scrape pods with this annotation set to "true"
-          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_label_component]
             action: keep
-            regex: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ALERTMANAGER — Alert routing and deduplication
-# ─────────────────────────────────────────────────────────────────────────────
-# When Prometheus rules fire, alerts are sent here.
-# Alertmanager groups them, deduplicates, and routes to destinations.
-alertmanager:
-  enabled: true
-  # Default config: alerts are silenced (no email/Slack integration yet)
-  # To add routes, create a Kubernetes Secret and reference it here
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA RETENTION — Keep metrics for 15 days; use managed-csi storage class
-# ─────────────────────────────────────────────────────────────────────────────
-prometheus:
-  prometheusSpec:
-    retention: 15d   # Delete metrics older than 15 days
-    
-    # PersistentVolumeClaim for Prometheus database
-    # Without this, metrics are lost when the pod restarts
+            regex: opentelemetry-collector;agent-collector
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            action: keep
+            regex: metrics
+    retention: 7d
     storageSpec:
       volumeClaimTemplate:
         spec:
-          storageClassName: managed-csi   # Azure managed disk
+          storageClassName: managed-csi
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 20Gi   # 20 GB is typical for 15 days of metrics
+              storage: 20Gi
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GRAFANA PERSISTENCE — Save dashboards to disk
-# ─────────────────────────────────────────────────────────────────────────────
-grafana:
-  persistence:
-    enabled: true
-    storageClassName: managed-csi
-    size: 5Gi   # 5 GB for dashboard definitions and provisioning data
+prometheusOperator:
+  admissionWebhooks:
+    patch:
+      enabled: true  # Set to false only if hook pods can't schedule (see L-014)
 
-EOF
+alertmanager:
+  enabled: true
 
-# Create Grafana admin secret used by existingSecret in values.yaml
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  enabled: true
+```
+
+> **Why `existingSecret` instead of `adminPassword`?**  
+> Putting a password directly in a values file risks it ending up in git history or Helm release metadata. Pre-creating a secret decouples the credential lifecycle from the Helm release.
+
+> **Why label-based scraping instead of annotation-based?**  
+> The OTel demo chart does not add `prometheus.io/scrape: "true"` annotations to its pods. Label matching (`app.kubernetes.io/name` + `component`) is more reliable than relying on annotations that may not be set.
+
+### Deploy
+
+```bash
+# Pre-create the Grafana admin secret before installing the chart
+# Edit k8s/monitoring/grafana-admin-secret.yaml to set a real password first
 kubectl apply -f k8s/monitoring/grafana-admin-secret.yaml
 
-# Install
+# Install / upgrade (omit --wait to avoid timeout on slow nodes — see L-012)
 helm upgrade --install kube-prometheus-stack \
   prometheus-community/kube-prometheus-stack \
   --namespace monitoring \
+  --create-namespace \
   --values k8s/monitoring/prometheus-values.yaml \
-  --wait \
   --timeout 10m
 
 # Verify
 kubectl get pods -n monitoring
 kubectl get services -n monitoring
 ```
+
+> **Why no `--wait`?** With `--wait`, Helm blocks until all pods including DaemonSets are Ready. If a DaemonSet pod is pending due to node capacity or scheduling constraints it causes the whole `helm upgrade` to time out even though the workload is healthy. See L-012.
 
 ### Verify the components are running and connected
 
@@ -769,77 +799,63 @@ Kubernetes runs **containerized applications** — but containers are **immutabl
 
 ### Real Examples in This Project
 
-#### ConfigMap Example: Prometheus Configuration
+#### ConfigMap Example: OTel Collector Configuration (Helm-generated)
 
-Prometheus needs to know **which services to scrape** (job targets). Rather than hardcoding this in the Prometheus binary, we inject it as a ConfigMap:
+The `opentelemetry-demo` Helm chart auto-generates a ConfigMap called `otel-collector-agent` in the `otel-demo` namespace. You never write this manually — Helm creates it from its chart templates when you run `helm upgrade --install`.
 
-```yaml
-# Example (stored in etcd, not in container image)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: prometheus-config
-  namespace: monitoring
-data:
-  prometheus.yml: |
-    global:
-      scrape_interval: 30s
-    scrape_configs:
-      - job_name: 'otel-collector'
-        kubernetes_sd_configs:
-          - role: pod
-            namespaces:
-              names: ['otel-demo']
+The pod mounts it as a volume at `/conf/relay.yaml` (visible in `kubectl describe pod`):
+
+```
+Volumes:
+  opentelemetry-collector-configmap:
+    Type:      ConfigMap (a volume populated by a ConfigMap)
+    Name:      otel-collector-agent   ← auto-created by Helm chart
 ```
 
-**Benefit:** Change scrape targets without rebuilding Prometheus image. Prometheus pod auto-reloads configuration.
-
-#### Secret Example: Grafana Admin Password
-
-In this project, Grafana reads admin credentials from a pre-created Secret (`grafana-admin-credentials`) referenced by `existingSecret` in the values file:
+Inspect what the chart generated:
 
 ```bash
-# Query the secret (base64 encoded)
+kubectl get configmap otel-collector-agent -n otel-demo -o yaml
+```
+
+This contains the full OTel collector pipeline: receivers (OTLP on `:4317`/`:4318`), processors, and exporters (Jaeger, Prometheus on `:8888`). The collector uses `--config=/conf/relay.yaml` as its startup argument, reading this file from the mounted ConfigMap.
+
+**Key insight:** Helm charts don't just deploy pods. They generate all supporting objects — ConfigMaps, Secrets, ServiceAccounts, RBAC rules, Services — from their templates. When you change a value in `values.yaml` and run `helm upgrade`, Helm re-renders and updates all these objects automatically.
+
+#### Secret Example: Prometheus Scrape Config (Operator-generated)
+
+In kube-prometheus-stack, the Prometheus Operator does **not** use a plain ConfigMap for scrape targets. It generates a **compressed Secret**:
+
+```bash
+# The Prometheus Operator generates this Secret — not a ConfigMap
+kubectl get secret prometheus-kube-prometheus-stack-prometheus -n monitoring
+
+# Decode the full merged config (additionalScrapeConfigs + ServiceMonitors)
+kubectl get secret prometheus-kube-prometheus-stack-prometheus -n monitoring \
+  -o jsonpath='{.data.prometheus\.yaml\.gz}' | base64 -d | gunzip | grep "^- job_name:"
+```
+
+Your `additionalScrapeConfigs` in `k8s/monitoring/prometheus-values.yaml` feeds into this Secret alongside the auto-generated ServiceMonitor targets. See [Section 7.3.1](07-observability.md#731-where-prometheus-scrape-targets-are-defined) for the full explanation.
+
+#### Secret Example: Grafana Admin Password (manually pre-created)
+
+This is one Secret you **do** create manually — before running `helm install` — because Helm needs it to exist at deploy time:
+
+```bash
+# k8s/monitoring/grafana-admin-secret.yaml — apply this before helm install
+kubectl apply -f k8s/monitoring/grafana-admin-secret.yaml
+
+# Query the password later
 kubectl -n monitoring get secret grafana-admin-credentials \
-  -o jsonpath="{.data.admin-password}" | base64 -d
-
-# Secret is stored in etcd, encrypted if enabled
-# Pod mounts it as an environment variable at runtime
+  -o jsonpath="{.data.admin-password}" | base64 -d ; echo
 ```
 
-**Benefit:** 
-- Credentials never appear in container images (not in container registry)
-- Can be rotated without rebuilding images
-- Kubernetes can encrypt them at rest (etcd encryption)
+Grafana reads it via `existingSecret` in `prometheus-values.yaml` rather than taking a plaintext `adminPassword` — so the credential is never stored in Helm release history or your values file.
 
-#### ConfigMap Example: OTel Collector Configuration
-
-The OTel collector in `otel-demo` namespace uses a ConfigMap for its receiver/exporter configuration:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: otel-collector-config
-  namespace: otel-demo
-data:
-  config.yaml: |
-    receivers:
-      otlp:
-        protocols:
-          grpc:
-            endpoint: 0.0.0.0:4317
-          http:
-            endpoint: 0.0.0.0:4318
-    exporters:
-      prometheus:
-        endpoint: "0.0.0.0:8888"
-    service:
-      pipelines:
-        metrics:
-          receivers: [otlp]
-          exporters: [prometheus]
-```
+**Benefit:**
+- Credentials never appear in container images or Helm history
+- Can be rotated without a `helm upgrade`
+- Kubernetes can encrypt Secrets at rest in etcd
 
 ### How Pods Access ConfigMaps and Secrets
 
@@ -1014,7 +1030,77 @@ kubectl -n otel-demo set env deployment/cart \
 
 ### Option 2: Azure Key Vault Integration (Production)
 
-For sensitive credentials, integrate with **Azure Key Vault** using the **Secrets Store CSI Driver**:
+For sensitive credentials, integrate with **Azure Key Vault** using the **Secrets Store CSI Driver**.
+
+#### Architecture Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SETUP (one-time, done by platform team)                                    │
+│                                                                             │
+│  1. Create UAMI (User Assigned Managed Identity)                            │
+│     └─ az identity create                                                   │
+│                                                                             │
+│  2. Create Federated Credential on UAMI                                     │
+│     └─ binds: AKS OIDC issuer + Kubernetes ServiceAccount subject           │
+│        az identity federated-credential create                              │
+│                                                                             │
+│  3. Annotate Kubernetes ServiceAccount with UAMI client ID                  │
+│     └─ azure.workload.identity/client-id: "<UAMI_CLIENT_ID>"               │
+│                                                                             │
+│  4. Grant UAMI "Key Vault Secrets User" on the Key Vault                    │
+│     └─ az role assignment create                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  RUNTIME (happens automatically when pod starts)                            │
+│                                                                             │
+│  Pod starts with serviceAccountName: workload-identity-sa                  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  AKS injects projected token (OIDC) into pod                               │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Secrets Store CSI Driver reads SecretProviderClass                        │
+│  └─ knows: keyvaultName, tenantId, clientID (UAMI)                         │
+│       │                                                                     │
+│       ▼                                                                     │
+│  CSI Driver exchanges OIDC token with Microsoft Entra ID                   │
+│  └─ validates against federated credential (issuer + subject match)        │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Microsoft Entra issues access token for UAMI                              │
+│       │                                                                     │
+│       ▼                                                                     │
+│  CSI Driver calls Azure Key Vault with access token                        │
+│  └─ GET https://kv-devops-aks-*.vault.azure.net/secrets/db-password        │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Secret mounted as file at /mnt/secrets-store/db-password                  │
+│  (optionally synced to Kubernetes Secret → env var)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  KEY OBJECTS AND WHERE THEY LIVE                                            │
+│                                                                             │
+│  Azure                         Kubernetes (AKS)                            │
+│  ──────                         ──────────────────                         │
+│  UAMI (identity)           ←→  ServiceAccount (annotated)                  │
+│  Federated Credential      ←→  OIDC subject binding                        │
+│  Key Vault (secrets)       ←→  SecretProviderClass (config)                │
+│  KV access policy/RBAC     ←→  CSI mount on pod volume                    │
+│                                                                             │
+│  config file: k8s/secrets/secret-provider.yaml                             │
+│  identity file: k8s/secrets/app-runtime-secrets.yaml (ServiceAccount)      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why no password is stored in the cluster:**
+- Secret value lives only in Azure Key Vault
+- Pod gets a short-lived OIDC token (not a password)
+- That token is exchanged for an access token scoped to Key Vault
+- Token expiry is automatic — no rotation needed
+- If the pod stops, the file is gone; it is re-fetched on next start
 
 #### Step 1: Install the Secrets Store CSI Driver
 
@@ -1030,6 +1116,81 @@ helm upgrade --install azure-csi-secrets \
   --namespace kube-system \
   --set syncSecret.enabled=true
 ```
+
+#### Step 1.5: Create UAMI + Federated Credential (Workload Identity)
+
+Use this compact flow to create the identity and bind it to a Kubernetes ServiceAccount.
+
+```bash
+# Variables
+RG=rg-devops-aks
+AKS=aks-devops-project
+NS=otel-demo
+SA=workload-identity-sa
+UAMI_NAME=uami-otel-secrets
+KV_NAME=<your-keyvault-name>
+
+# 1) Create UAMI (or reuse existing)
+az identity create -g $RG -n $UAMI_NAME
+
+UAMI_CLIENT_ID=$(az identity show -g $RG -n $UAMI_NAME --query clientId -o tsv)
+UAMI_PRINCIPAL_ID=$(az identity show -g $RG -n $UAMI_NAME --query principalId -o tsv)
+TENANT_ID=$(az account show --query tenantId -o tsv)
+AKS_OIDC_ISSUER=$(az aks show -g $RG -n $AKS --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+# 2) ServiceAccount annotated with UAMI client ID
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: $SA
+  namespace: $NS
+  annotations:
+    azure.workload.identity/client-id: "$UAMI_CLIENT_ID"
+EOF
+
+# 3) Federated credential (note: use --issuer/--subject/--audiences)
+# Some Azure CLI versions do not support '--parameters' for this command.
+az identity federated-credential create \
+  --name fic-$NS-$SA \
+  --identity-name $UAMI_NAME \
+  --resource-group $RG \
+  --issuer $AKS_OIDC_ISSUER \
+  --subject system:serviceaccount:$NS:$SA \
+  --audiences api://AzureADTokenExchange
+
+# 4) Grant Key Vault read access to the UAMI
+# IMPORTANT: pick the command based on Key Vault permission model.
+KV_RBAC_ENABLED=$(az keyvault show -n $KV_NAME -g $RG --query properties.enableRbacAuthorization -o tsv)
+
+if [ "$KV_RBAC_ENABLED" = "true" ]; then
+  # RBAC model
+  KV_ID=$(az keyvault show -n $KV_NAME -g $RG --query id -o tsv)
+  az role assignment create \
+    --assignee-object-id $UAMI_PRINCIPAL_ID \
+    --assignee-principal-type ServicePrincipal \
+    --role "Key Vault Secrets User" \
+    --scope $KV_ID
+else
+  # Access policy model
+  az keyvault set-policy \
+    --name $KV_NAME \
+    --object-id $UAMI_PRINCIPAL_ID \
+    --secret-permissions get list
+fi
+
+# 5) Create the Key Vault secret referenced by SecretProviderClass
+# SecretProviderClass requests objectName: db-password, so create it first.
+az keyvault secret set \
+  --vault-name $KV_NAME \
+  --name db-password \
+  --value "CHANGE_ME_DB_PASSWORD"
+```
+
+Keep these outputs for Step 2:
+- `UAMI_CLIENT_ID` -> `clientID`
+- `KV_NAME` -> `keyvaultName`
+- `TENANT_ID` -> `tenantId`
 
 #### Step 2: Create a SecretProviderClass
 
@@ -1055,8 +1216,8 @@ spec:
   # Azure Key Vault configuration
   parameters:
     usePodIdentity: "false"
-    useVMManagedIdentity: "true"      # Use AKS managed identity
-    clientID: "<workload-identity-client-id>"
+    useVMManagedIdentity: "false"     # Workload Identity pattern
+    clientID: "<uami-client-id>"      # Client ID of a User Assigned Managed Identity (created separately)
     keyvaultName: "<your-keyvault-name>"
     tenantId: "<your-tenant-id>"
     objects: |
@@ -1065,11 +1226,85 @@ spec:
           objectName: db-password
           objectType: secret
           objectVersion: ""
+
+# Note:
+# AKS creation in Section 3 enables OIDC + Workload Identity but does not create
+# a UAMI automatically. Create a UAMI and federated credential, then use that
+# UAMI client ID here.
 ```
 
 #### Step 3: Mount in Pod Spec
 
+> **Should you do this now?**  
+> **Yes — but use a test pod first**, not the real `cart` Deployment. The test pod confirms the full chain works (UAMI → federated credential → Key Vault) before you change any running workload.
+
+**What Step 3 means in the runtime flow:**
+
+```
+Pod spec has two things:
+  1. serviceAccountName: workload-identity-sa   ← which identity to use
+  2. volume with csi driver secrets-store       ← where to mount the secret
+
+At pod start:
+  CSI driver reads the SecretProviderClass (from step 2)
+  Uses the ServiceAccount's identity (from step 1.5)
+  Fetches the secret from Key Vault
+  Mounts it as a file at mountPath
+```
+
+**Sub-step A: Test pod (do this first to validate the setup)**
+
+```bash
+NS=otel-demo
+SA=workload-identity-sa
+
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kv-test-pod
+  namespace: $NS
+  labels:
+    azure.workload.identity/use: "true"   # Required — tells mutating webhook to inject OIDC token
+spec:
+  serviceAccountName: $SA                 # Must match ServiceAccount from Step 1.5
+  containers:
+    - name: busybox
+      image: busybox
+      command: ["/bin/sh", "-c", "sleep 3600"]
+      volumeMounts:
+        - name: kv-secrets
+          mountPath: /mnt/secrets-store   # Secret file will appear here
+          readOnly: true
+  volumes:
+    - name: kv-secrets
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: azure-keyvault-secrets  # Must match name in Step 2
+EOF
+
+# Wait for pod to start (CSI fetches secret at this moment)
+kubectl get pod kv-test-pod -n $NS -w
+
+# Verify the secret file is mounted
+kubectl exec -n $NS kv-test-pod -- ls /mnt/secrets-store
+kubectl exec -n $NS kv-test-pod -- cat /mnt/secrets-store/db-password
+
+# Clean up test pod when done
+kubectl delete pod kv-test-pod -n $NS
+```
+
+**What to expect:**
+- Pod `Running` → CSI mount worked → Key Vault fetch succeeded
+- Pod `ContainerCreating` stuck → describe the pod, check Events for CSI errors
+- Secret file contains the plaintext value from Key Vault
+
+**Sub-step B: Add to a real Deployment (only after test pod succeeds)**
+
 ```yaml
+# Add these to the Deployment you want to use the secret
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1077,20 +1312,52 @@ metadata:
   namespace: otel-demo
 spec:
   template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"   # ← ADD THIS LABEL to pod template
     spec:
+      serviceAccountName: workload-identity-sa  # ← ADD THIS to use UAMI identity
       containers:
       - name: cartservice
+        env:
+          # Option A: Read from mounted file in app code
+          # Option B: Sync to env var via secretObjects in SecretProviderClass
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: app-secrets          # synced by secretObjects in SecretProviderClass
+                key: db-password
         volumeMounts:
-        - name: secrets
-          mountPath: "/mnt/secrets"
+        - name: kv-secrets
+          mountPath: /mnt/secrets-store
           readOnly: true
       volumes:
-      - name: secrets
+      - name: kv-secrets
         csi:
           driver: secrets-store.csi.k8s.io
           readOnly: true
           volumeAttributes:
-            secretProviderClass: "azure-keyvault-secrets"
+            secretProviderClass: azure-keyvault-secrets
+```
+
+> **Two ways to consume the secret in your app:**
+>
+> | Method | How | Best for |
+> |--------|-----|----------|
+> | File read | App reads `/mnt/secrets-store/db-password` directly | Apps that support file-based config |
+> | Env var | SecretProviderClass `secretObjects` syncs to a K8s Secret → env var | Apps expecting `DB_PASSWORD` env var |
+>
+> The `secretObjects` block in your `secret-provider.yaml` enables the env var path.
+
+**Troubleshooting if pod stays in ContainerCreating:**
+
+```bash
+kubectl describe pod kv-test-pod -n $NS | grep -A 20 "^Events:"
+
+# Common causes:
+# "failed to get provider" → CSI driver not installed (redo Step 1)
+# "keyvault.BaseClient#GetSecret: 403"  → UAMI missing Key Vault RBAC (redo Step 1.5 #4)
+# "token exchange failed"               → federated credential mismatch (check issuer/subject)
 ```
 
 #### Step 4: Access in Application
