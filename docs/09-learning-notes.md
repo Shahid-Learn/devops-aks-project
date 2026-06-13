@@ -398,6 +398,10 @@ spec:
 
 ## 9.9 Common kubectl Commands Reference
 
+> For the full reference covering every object type (Nodes, Pods, Deployments, DaemonSets, Services, Ingress, ConfigMaps, Secrets, PVCs, RBAC, HPA, Jobs, Events, port-forward, exec, Prometheus-specific commands) see **[docs/13-kubectl-reference.md](13-kubectl-reference.md)**.
+
+Quick essentials:
+
 ```bash
 # Cluster
 kubectl get nodes -o wide
