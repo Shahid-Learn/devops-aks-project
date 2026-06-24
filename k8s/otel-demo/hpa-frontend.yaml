@@ -1,0 +1,79 @@
+# k8s/otel-demo/hpa-frontend.yaml
+#
+# HorizontalPodAutoscaler for frontend service.
+# Automatically scales frontend replicas based on CPU utilization.
+#
+# Key concepts:
+# - metricType: Resource (CPU/memory) vs Custom (app-specific metrics)
+# - stabilizationWindow: grace period to avoid thrashing (scale up/down oscillation)
+# - behavior: fine-grained control over scaling speed and aggressiveness
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend-hpa
+  namespace: otel-demo
+spec:
+  # What to scale: frontend Deployment
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+
+  # Replica bounds
+  minReplicas: 1          # do not go below 1 (always have at least one)
+  maxReplicas: 6          # do not go above 6 (cost/resource cap)
+
+  # Metrics that trigger scaling
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65  # target = 65% avg CPU across all replicas
+
+  # BEHAVIOR: fine-grained control over scale-up and scale-down speed
+  #
+  # Without behavior, HPA uses defaults which can be aggressive:
+  # - scales up immediately when metrics exceed target
+  # - scales down after 5 minutes of stable low usage
+  #
+  # Here we customize for a web frontend:
+  behavior:
+    # SCALE UP behavior
+    # When CPU > 65%, how aggressively should we add replicas?
+    scaleUp:
+      # stabilizationWindowSeconds: 30
+      #   After scaling up, wait 30s before considering another scale-up.
+      #   This prevents rapid oscillation (scale-up/down/up/down).
+      #   Lower value = faster response to increasing load.
+      #   Higher value = more stable but slower to respond.
+      stabilizationWindowSeconds: 30
+
+      policies:
+        # policy 1: Add 100% of current replicas every 30s
+        # If we have 1 replica at high CPU, add 1 more (2 total) after 30s
+        # If we have 2 replicas at high CPU, add 2 more (4 total) after 30s
+        # This is aggressive/fast scale-up (good for sudden traffic spikes)
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+    # SCALE DOWN behavior
+    # When CPU < 65%, how should we remove excess replicas?
+    scaleDown:
+      # stabilizationWindowSeconds: 120
+      #   After scaling down, wait 120s before considering another scale-down.
+      #   Why 120s for scale-down? Avoid losing capacity during brief CPU dips.
+      #   Asymmetric timing: fast up, slow down = better resilience.
+      stabilizationWindowSeconds: 120
+
+      policies:
+        # policy 1: Remove 50% of current replicas every 60s
+        # If we have 4 replicas with low CPU, remove 2 after 60s (leaving 2)
+        # Wait another 120s, then check again. If still low, remove 1 (leaving 1)
+        # This is conservative/slow scale-down (avoids capacity loss)
+        - type: Percent
+          value: 50
+          periodSeconds: 60

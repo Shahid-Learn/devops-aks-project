@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: otel-demo-quota
+  namespace: otel-demo
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 10Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "60"
