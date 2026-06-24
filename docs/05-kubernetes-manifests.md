@@ -1406,28 +1406,170 @@ kubectl describe resourcequota otel-demo-quota -n otel-demo
 
 ## 5.8 HorizontalPodAutoscaler (Optional)
 
+Use this section as a safe HPA playground. It scales only `frontend` and is easy to roll back.
+
+### Prerequisites
+
+```bash
+# Metrics Server must be available (AKS enables this by default)
+kubectl top nodes
+
+# Confirm the deployment exists and has CPU requests
+kubectl get deployment frontend -n otel-demo
+kubectl get deployment frontend -n otel-demo -o yaml | grep -A6 "resources:"
+```
+
+If CPU requests are missing on the target container, CPU-based HPA will not calculate utilization correctly.
+
+### Create HPA manifest
+
+File: `k8s/otel-demo/hpa-frontend.yaml`
+
 ```yaml
 # k8s/otel-demo/hpa-frontend.yaml
+#
+# HorizontalPodAutoscaler for frontend service.
+# Automatically scales frontend replicas based on CPU utilization.
+#
+# Key concepts:
+# - metricType: Resource (CPU/memory) vs Custom (app-specific metrics)
+# - stabilizationWindow: grace period to avoid thrashing (scale up/down oscillation)
+# - behavior: fine-grained control over scaling speed and aggressiveness
+
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: frontend-hpa
   namespace: otel-demo
 spec:
+  # What to scale: frontend Deployment
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: otel-demo-frontend
-  minReplicas: 1
-  maxReplicas: 5
+    name: frontend
+
+  # Replica bounds
+  minReplicas: 1          # do not go below 1 (always have at least one)
+  maxReplicas: 6          # do not go above 6 (cost/resource cap)
+
+  # Metrics that trigger scaling
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 65  # target = 65% avg CPU across all replicas
+
+  # BEHAVIOR: fine-grained control over scale-up and scale-down speed
+  #
+  # Without behavior, HPA uses defaults which can be aggressive:
+  # - scales up immediately when metrics exceed target
+  # - scales down after 5 minutes of stable low usage
+  #
+  # Here we customize for a web frontend:
+  behavior:
+    # SCALE UP behavior
+    # When CPU > 65%, how aggressively should we add replicas?
+    scaleUp:
+      # stabilizationWindowSeconds: 30
+      #   After scaling up, wait 30s before considering another scale-up.
+      #   This prevents rapid oscillation (scale-up/down/up/down).
+      #   Lower value = faster response to increasing load.
+      #   Higher value = more stable but slower to respond.
+      stabilizationWindowSeconds: 30
+
+      policies:
+        # policy 1: Add 100% of current replicas every 30s
+        # If we have 1 replica at high CPU, add 1 more (2 total) after 30s
+        # If we have 2 replicas at high CPU, add 2 more (4 total) after 30s
+        # This is aggressive/fast scale-up (good for sudden traffic spikes)
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+    # SCALE DOWN behavior
+    # When CPU < 65%, how should we remove excess replicas?
+    scaleDown:
+      # stabilizationWindowSeconds: 120
+      #   After scaling down, wait 120s before considering another scale-down.
+      #   Why 120s for scale-down? Avoid losing capacity during brief CPU dips.
+      #   Asymmetric timing: fast up, slow down = better resilience.
+      stabilizationWindowSeconds: 120
+
+      policies:
+        # policy 1: Remove 50% of current replicas every 60s
+        # If we have 4 replicas with low CPU, remove 2 after 60s (leaving 2)
+        # Wait another 120s, then check again. If still low, remove 1 (leaving 1)
+        # This is conservative/slow scale-down (avoids capacity loss)
+        - type: Percent
+          value: 50
+          periodSeconds: 60
 ```
+
+### Apply and observe
+
+```bash
+kubectl apply -f k8s/otel-demo/hpa-frontend.yaml
+
+# Live HPA status
+kubectl get hpa -n otel-demo -w
+
+# In another terminal, watch frontend replicas
+kubectl get deploy frontend -n otel-demo -w
+```
+
+### Generate load to trigger scaling
+
+Option A (in-cluster load using existing load-generator):
+
+```bash
+# Temporarily increase load-generator replicas to produce pressure
+kubectl scale deployment load-generator -n otel-demo --replicas=2
+
+# Watch frontend CPU and replica count
+kubectl top pods -n otel-demo | grep frontend
+kubectl get hpa frontend-hpa -n otel-demo
+```
+
+Option B (external load from your machine):
+
+```bash
+INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+for i in $(seq 1 2000); do curl -s "http://$INGRESS_IP/" > /dev/null; done
+```
+
+### Validate HPA decisions
+
+```bash
+kubectl describe hpa frontend-hpa -n otel-demo
+
+# Focus areas in output:
+# - Targets: current CPU vs target CPU
+# - Events: SuccessfulRescale messages
+```
+
+### Roll back playground changes
+
+```bash
+# Return load-generator to normal
+kubectl scale deployment load-generator -n otel-demo --replicas=1
+
+# Remove HPA (frontend stays at current replica count until you set it)
+kubectl delete hpa frontend-hpa -n otel-demo
+
+# Optional: force frontend back to 1 replica
+kubectl scale deployment frontend -n otel-demo --replicas=1
+```
+
+### Common issues
+
+- `TARGETS: <unknown>/65%` in HPA output:
+  - Metrics API not ready or container has no CPU request.
+- HPA does not scale even under load:
+  - Traffic not hitting `frontend` pod, or CPU request is too high relative to real usage.
+- Scale-down too fast/slow:
+  - Tune `behavior.scaleDown.stabilizationWindowSeconds`.
 
 ---
 
