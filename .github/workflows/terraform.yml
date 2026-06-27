@@ -12,7 +12,7 @@ on:
   workflow_dispatch:   # Allow manual trigger
 
 concurrency:
-  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  group: terraform-aks-project-state
   cancel-in-progress: true
 
 permissions:
@@ -124,9 +124,9 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: terraform plan -input=false -lock-timeout=300s -out=tfplan
-        continue-on-error: true
 
       - name: Upload tfplan artifact
+        if: steps.plan.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
