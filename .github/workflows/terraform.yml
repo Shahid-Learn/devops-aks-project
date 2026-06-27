@@ -11,6 +11,10 @@ on:
       - 'terraform/**'
   workflow_dispatch:   # Allow manual trigger
 
+concurrency:
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   id-token: write      # OIDC
   contents: read
@@ -62,7 +66,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -input=false -lock-timeout=300s -no-color
+        run: terraform plan -input=false -lock=false -no-color
         continue-on-error: true
 
       - name: Comment Plan on PR
