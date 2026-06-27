@@ -15,6 +15,12 @@ resource "azurerm_key_vault" "main" {
 
     secret_permissions = ["Get", "List", "Set", "Delete", "Purge"]
   }
+
+  lifecycle {
+    ignore_changes = [
+      access_policy,
+    ]
+  }
 }
 
 data "azurerm_client_config" "current" {}
