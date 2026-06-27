@@ -1,3 +1,5 @@
+//CI test marker for Chapter 6.2 pipeline verification
+
 data "azurerm_client_config" "current" {}
 
 # Reference the existing resource group (created manually in Section 2)

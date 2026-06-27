@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.15.0"
+  required_version = ">= 1.9.8, < 2.0.0"
 
   required_providers {
     azurerm = {
@@ -20,7 +20,6 @@ provider "azurerm" {
       recover_soft_deleted_key_vaults = true
     }
   }
-  subscription_id = var.subscription_id
 }
 
 provider "azuread" {}

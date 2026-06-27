@@ -16,6 +16,9 @@ resource "azurerm_kubernetes_cluster" "main" {
     os_disk_size_gb              = 64 # Reduced from 128 — saves on managed disk cost
     type                         = "VirtualMachineScaleSets"
     only_critical_addons_enabled = true # Taint: only system pods here
+    upgrade_settings {
+      max_surge = "10%"
+    }
   }
 
   # Use SystemAssigned managed identity
@@ -73,6 +76,10 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
 
   node_labels = {
     "workload-type" = "app"
+  }
+
+  upgrade_settings {
+    max_surge = "10%"
   }
 
   tags = var.tags

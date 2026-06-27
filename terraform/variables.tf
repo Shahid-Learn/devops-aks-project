@@ -1,8 +1,3 @@
-variable "subscription_id" {
-  type        = string
-  description = "Azure Subscription ID (required by azurerm 4.x provider)"
-}
-
 variable "location" {
   type        = string
   default     = "swedencentral" # Region where rg-devops-aks was created in Section 2
