@@ -18,6 +18,7 @@ permissions:
 
 env:
   TF_VERSION: "1.9.8"
+  TF_IN_AUTOMATION: "true"
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -54,14 +55,14 @@ jobs:
         continue-on-error: true
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Validate
         run: terraform validate
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -no-color
+        run: terraform plan -input=false -lock-timeout=300s -no-color
         continue-on-error: true
 
       - name: Comment Plan on PR
@@ -114,11 +115,11 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -out=tfplan
+        run: terraform plan -input=false -lock-timeout=300s -out=tfplan
         continue-on-error: true
 
       - name: Upload tfplan artifact
@@ -166,10 +167,10 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false
 
       - name: Terraform Apply (using saved plan)
-        run: terraform apply -no-color tfplan
+        run: terraform apply -input=false -lock-timeout=300s -no-color tfplan
 
       - name: Get Terraform Outputs
         id: tf_outputs
