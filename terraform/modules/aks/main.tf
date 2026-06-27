@@ -70,7 +70,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "app" {
   # Note: azurerm 4.x renamed enable_auto_scaling → auto_scaling_enabled
   auto_scaling_enabled = true
   min_count            = 2
-  max_count            = 4
+  max_count            = 6
   node_count           = 2
   os_disk_size_gb      = 64 # Reduced from 128
 
