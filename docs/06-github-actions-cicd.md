@@ -363,7 +363,20 @@ For your setup, the right home is the repo that contains the microservice source
 
 - https://github.com/Shahid-Learn/opentelemetry-demo/tree/main/src
 
-Why: this workflow detects changes under `src/`, builds service images from those folders, and pushes them to ACR. If the `src/` tree is in a different repo, this workflow should be created there.
+Why: this workflow detects changes under `src/`, builds service images from those folders, and pushes them to ACR. In your setup the `src/` tree lives in the application repository, so this workflow should be created there and should trigger deployment in the infra repo after a successful push on `main`.
+
+Before using this workflow in the application repo, add these settings there:
+
+- **Secrets**
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+  - `INFRA_REPO_DISPATCH_TOKEN`  
+    Fine-grained PAT or GitHub App token with permission to run workflows in `Shahid-Learn/devops-aks-project`
+- **Variables**
+  - `ACR_NAME`
+  - `INFRA_REPO_OWNER` = `Shahid-Learn`
+  - `INFRA_REPO_NAME` = `devops-aks-project`
 
 `.github/workflows/ci-build-push.yml`
 
@@ -393,6 +406,10 @@ permissions:
 env:
   ACR_SERVER: ${{ vars.ACR_NAME }}.azurecr.io
 
+concurrency:
+  group: ci-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   detect-changes:
     name: Detect Changed Services
@@ -404,18 +421,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Detect changed service directories
         id: changes
         run: |
-          if [ "${{ github.event.inputs.services }}" != "" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.services }}" != "" ]; then
             # Manual trigger with specified services
             SERVICES=$(echo "${{ github.event.inputs.services }}" | tr ',' '\n' | jq -R -s -c 'split("\n")[:-1]')
           else
-            # Detect from git diff
-            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep '^src/' | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
-            SERVICES=$CHANGED
+            # Detect from git diff for PRs and direct pushes
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              BASE_SHA="${{ github.event.pull_request.base.sha }}"
+              HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            else
+              BASE_SHA="${{ github.event.before }}"
+              HEAD_SHA="${{ github.sha }}"
+            fi
+
+            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep '^src/' || true)
+            if [ -z "$CHANGED" ]; then
+              SERVICES='[]'
+            else
+              SERVICES=$(echo "$CHANGED" | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+            fi
           fi
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
           echo "Changed services: $SERVICES"
@@ -485,23 +514,29 @@ jobs:
           sarif_file: trivy-results.sarif
 
   trigger-deploy:
-    name: Trigger Deployment
+    name: Trigger Infra Repo Deployment
     runs-on: ubuntu-latest
     needs: build-push
     if: github.ref == 'refs/heads/main' && needs.build-push.result == 'success'
 
     steps:
-      - name: Trigger CD workflow
-        uses: actions/github-script@v7
+      - name: Trigger infra repo CD workflow
+        uses: actions/github-script@v8
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          INFRA_REPO_OWNER: ${{ vars.INFRA_REPO_OWNER }}
+          INFRA_REPO_NAME: ${{ vars.INFRA_REPO_NAME }}
         with:
+          github-token: ${{ secrets.INFRA_REPO_DISPATCH_TOKEN }}
           script: |
             await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner: process.env.INFRA_REPO_OWNER,
+              repo: process.env.INFRA_REPO_NAME,
               workflow_id: 'cd-deploy.yml',
               ref: 'main',
               inputs: {
-                image_tag: context.sha.substring(0, 7)
+                image_tag: process.env.IMAGE_TAG.substring(0, 7),
+                environment: 'production'
               }
             });
 ```
@@ -517,7 +552,7 @@ Think of it as three stages:
    Creates one parallel job per changed service using a matrix.
 
 3. `trigger-deploy`
-   Only on `main`, tells the CD workflow to deploy the new image tag.
+  Only on `main`, tells the **infra repo** CD workflow to deploy the new image tag.
 
 ### Why the source repo matters
 
@@ -768,7 +803,7 @@ After the image is pushed on `main`:
 That is the handoff between CI and CD:
 
 - CI decides what image was produced
-- CD decides when and where to deploy it
+- CD in the infra repo decides when and where to deploy it
 
 ### Example end-to-end flow
 
@@ -798,16 +833,12 @@ Because your source code is in a separate repo, the clean split is:
 2. **Infra repo** (`devops-aks-project`)
    Contains Terraform, Kubernetes manifests, and `cd-deploy.yml`
 
-In that model, CI in the source repo should trigger CD in the infra repo using one of these patterns:
+In that model, CI in the source repo should trigger CD in the infra repo. The workflow above uses **cross-repo `workflow_dispatch`** because your infra repo already exposes `cd-deploy.yml` as a manual workflow.
 
-- `repository_dispatch`
-- reusable workflow via `workflow_call`
-- GitOps update of image tag in a manifest/values file
-
-The current chapter shows the logical CI/CD flow, but because your code and infra are split across repos, you will need a cross-repository trigger when you implement it for real.
+The current chapter now shows the real split-repo flow you can implement directly. If you later want a more GitOps-style handoff, the next evolution would be updating a values file or opening an automated PR in the infra repo instead of dispatching the workflow directly.
 
 > [!TIP]
-> For learning, keep the current example as the conceptual model. When you implement it in the source repo, the main change is not the Docker build logic. The main change is how CI notifies the infra repo to deploy the new SHA.
+> For learning, start with cross-repo `workflow_dispatch` because it matches the deploy workflow you already validated in Section 6.2. The main change from the same-repo example is not the Docker build logic. The main change is how CI notifies the infra repo to deploy the new SHA.
 
 ---
 
@@ -1070,6 +1101,87 @@ Code Push to main
 | Local machine (WSL2 + corporate proxy) | Most likely to hit cert/trust errors during build/login | Apply WSL and Docker build trust fixes from [PRE-ACR-BUILD-CHECKLIST.md](PRE-ACR-BUILD-CHECKLIST.md) |
 | GitHub-hosted runners | Usually not behind corporate interception proxy | Standard workflow is typically enough; no special Zscaler handling needed |
 | Self-hosted runners (inside corporate network) | Can hit same cert issues as local machine | Install corporate CA chain on runner host and in build contexts; follow checklist patterns |
+
+---
+
+## 6.9 Recommended Two-Repo Architecture (App Team + Platform Team)
+
+Use this operating model for your setup:
+
+- **App repo (`opentelemetry-demo`)** owns source code and image CI
+- **Infra repo (`devops-aks-project`)** owns Terraform, Helm values, deployment workflows, and approvals
+
+High-level flow:
+
+1. Developer merges code in app repo
+2. App CI builds/scans images and pushes to ACR with immutable SHA tag (or digest)
+3. App CI notifies infra repo (cross-repo workflow dispatch)
+4. Infra CD runs with environment approval gate and deploys to AKS
+
+### Why this is recommended
+
+- Keeps clear ownership boundaries between application and platform teams
+- Preserves audit trail and approval history in infra repo
+- Reduces blast radius (app repo cannot directly mutate infra beyond allowed interface)
+- Supports easy migration to GitOps later
+
+### Phased rollout (recommended path)
+
+#### Phase 1 - Basic (start here)
+
+- App repo CI builds changed services under `src/`
+- App repo pushes images to ACR on `main`
+- App repo dispatches infra repo `cd-deploy.yml` with `image_tag`
+
+This is the quickest path and matches your current Chapter 6 implementation.
+
+#### Phase 2 - Promotion PR (next)
+
+- App repo CI resolves immutable image digest after push
+- App repo CI opens PR in infra repo updating image references
+- Platform/release team reviews and merges PR
+- Infra repo CD deploys approved digest
+
+Why this is better:
+
+- Deploys are tied to reviewed Git changes in infra repo
+- Stronger traceability and rollback (revert promotion PR)
+- Avoids drifting mutable tags
+
+#### Phase 3 - GitOps (target)
+
+- Flux watches infra repo desired state
+- Promotion updates Git (manually or automated image update policy)
+- Flux reconciles cluster from Git state
+
+Why this is ideal at scale:
+
+- Pull-based reconciliation and drift correction
+- Strong separation of duties and compliance posture
+- Clear environment promotion strategy via branches/folders
+
+### Day-1 setup checklist for split repos
+
+In **app repo**:
+
+- Secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `INFRA_REPO_DISPATCH_TOKEN`
+- Variables: `ACR_NAME`, `INFRA_REPO_OWNER`, `INFRA_REPO_NAME`
+- Workflow: `.github/workflows/ci-build-push.yml`
+
+In **infra repo**:
+
+- Workflow: `.github/workflows/cd-deploy.yml`
+- Environment: `production` with required reviewers
+- Variables: `RESOURCE_GROUP`, `AKS_CLUSTER_NAME`, `ACR_NAME`
+- Cluster policy manifests: quotas/limits aligned with actual workload footprint
+
+### Guardrails to keep from day 1
+
+- Use OIDC (no static credentials)
+- Pin action versions (prefer commit SHA pins over tags in production repos)
+- Keep deployment approval gate in infra repo
+- Prefer immutable image references for production promotion
+- Keep app CI and infra CD logs/summaries as release evidence
 
 ---
 

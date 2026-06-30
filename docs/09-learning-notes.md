@@ -43,6 +43,7 @@
 - [L-018: Node hit max pods even with free CPU/memory](#l-018-node-hit-max-pods-even-with-free-cpumemory)
 - [L-019: Jaeger ingress redirected in a loop](#l-019-jaeger-ingress-redirected-in-a-loop)
 - [L-020: DaemonSet pod Pending — freed slot by deleting a Deployment pod from the full node](#l-020-daemonset-pod-pending--freed-slot-by-deleting-a-deployment-pod-from-the-full-node)
+- [L-021: Deployment rollout exceeded progress deadline due to namespace ResourceQuota](#l-021-deployment-rollout-exceeded-progress-deadline-due-to-namespace-resourcequota)
 
 ---
 
@@ -1060,3 +1061,31 @@ These are actual problems encountered and resolved during setup. Each is a reali
   ```
 - **awk tip:** In `kubectl get pods -o wide`, `$7` is NODE. In `--all-namespaces` output, the columns shift right by one — `$8` is NODE (since `$1` becomes NAMESPACE).
 - **Lesson:** When a DaemonSet pod is stuck on a full node, delete a moveable Deployment pod from that specific node. The Deployment controller reschedules it elsewhere, freeing the slot for the DaemonSet.
+
+### L-021: Deployment rollout exceeded progress deadline due to namespace ResourceQuota
+
+- **Symptom:** `kubectl rollout status deployment/checkout` timed out with `exceeded its progress deadline`
+- **Root cause:** New ReplicaSet pods were never created because admission failed on namespace quota:
+  - `FailedCreate ... exceeded quota: otel-demo-quota`
+  - `requested: limits.cpu=1, used: limits.cpu=23450m, limited: limits.cpu=24`
+- **Why this is confusing:** The deployment appears to be a simple image update, but default rolling strategy may require temporary extra capacity (`maxSurge`) and quota admission can block pod creation before scheduling even starts.
+- **Fast mitigation options:**
+  1. Temporarily patch strategy for in-place replacement in constrained environments:
+     ```bash
+     kubectl -n otel-demo patch deploy checkout -p '{
+       "spec": {
+         "strategy": {
+           "type": "RollingUpdate",
+           "rollingUpdate": { "maxSurge": 0, "maxUnavailable": 1 }
+         }
+       }
+     }'
+     ```
+  2. Free quota headroom (scale down non-critical workloads) before rollout.
+  3. Increase namespace `ResourceQuota` if sustained workload requires it.
+- **Long-term fix:** Align quota and LimitRange defaults with real workload footprint and avoid relying on surge capacity in tightly constrained sandbox environments.
+- **Useful checks:**
+  - `kubectl -n otel-demo describe rs <new-rs-name>`
+  - `kubectl -n otel-demo describe quota otel-demo-quota`
+  - `kubectl -n otel-demo get events --sort-by=.metadata.creationTimestamp | tail -n 50`
+- **Lesson:** `ProgressDeadlineExceeded` is often an admission/quota problem, not an image pull/runtime crash problem.
