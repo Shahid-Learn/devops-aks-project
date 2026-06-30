@@ -1,0 +1,94 @@
+name: CD Deploy Changed Services
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Short git SHA tag to deploy (e.g. 7eb7023)"
+        required: true
+        type: string
+      changed_services:
+        description: "JSON array of changed services (e.g. [\"checkout\",\"cart\"])"
+        required: true
+        type: string
+      namespace:
+        description: "Kubernetes namespace"
+        required: false
+        default: "otel-demo"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_SERVER: ${{ vars.ACR_NAME }}.azurecr.io
+
+jobs:
+  deploy:
+    name: Deploy Changed Services
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+
+      - name: Validate and normalize services list
+        id: services
+        run: |
+          RAW='${{ github.event.inputs.changed_services }}'
+          SERVICES=$(echo "$RAW" | jq -r '.[]' | xargs)
+          if [ -z "$SERVICES" ]; then
+            echo "No services to deploy."
+            exit 1
+          fi
+          echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
+          echo "Deploying services: $SERVICES"
+
+      - name: Deploy updated images
+        env:
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          NAMESPACE: ${{ github.event.inputs.namespace }}
+          SERVICES: ${{ steps.services.outputs.services }}
+        run: |
+          set -euo pipefail
+
+          for svc in $SERVICES; do
+            echo "--- Deploying $svc:$IMAGE_TAG ---"
+
+            if ! kubectl -n "$NAMESPACE" get deployment "$svc" >/dev/null 2>&1; then
+              echo "Skipping $svc: deployment not found in namespace $NAMESPACE"
+              continue
+            fi
+
+            # Avoid quota deadlocks in constrained clusters by replacing in-place.
+            kubectl -n "$NAMESPACE" patch deployment "$svc" -p '{"spec":{"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":0,"maxUnavailable":1}}}}'
+
+            CONTAINER_NAME="$svc"
+            if ! kubectl -n "$NAMESPACE" get deployment "$svc" -o jsonpath='{.spec.template.spec.containers[*].name}' | grep -qw "$svc"; then
+              CONTAINER_NAME=$(kubectl -n "$NAMESPACE" get deployment "$svc" -o jsonpath='{.spec.template.spec.containers[0].name}')
+              echo "Container '$svc' not found, using first container '$CONTAINER_NAME'"
+            fi
+
+            kubectl -n "$NAMESPACE" set image deployment/"$svc" "$CONTAINER_NAME"="$ACR_SERVER/$svc:$IMAGE_TAG"
+            kubectl -n "$NAMESPACE" rollout status deployment/"$svc" --timeout=300s
+          done
+
+      - name: Show deployment images
+        env:
+          NAMESPACE: ${{ github.event.inputs.namespace }}
+        run: |
+          kubectl -n "$NAMESPACE" get deploy -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image
