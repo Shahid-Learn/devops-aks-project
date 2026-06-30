@@ -43,6 +43,7 @@
 - [L-018: Node hit max pods even with free CPU/memory](#l-018-node-hit-max-pods-even-with-free-cpumemory)
 - [L-019: Jaeger ingress redirected in a loop](#l-019-jaeger-ingress-redirected-in-a-loop)
 - [L-020: DaemonSet pod Pending — freed slot by deleting a Deployment pod from the full node](#l-020-daemonset-pod-pending--freed-slot-by-deleting-a-deployment-pod-from-the-full-node)
+- [L-021: End-of-day teardown and next-day rebootstrap checklist](#l-021-end-of-day-teardown-and-next-day-rebootstrap-checklist)
 - [L-021: Deployment rollout exceeded progress deadline due to namespace ResourceQuota](#l-021-deployment-rollout-exceeded-progress-deadline-due-to-namespace-resourcequota)
 - [L-022: Forked source workflow failed due to stale dependency in inherited checks workflow](#l-022-forked-source-workflow-failed-due-to-stale-dependency-in-inherited-checks-workflow)
 
@@ -1062,6 +1063,47 @@ These are actual problems encountered and resolved during setup. Each is a reali
   ```
 - **awk tip:** In `kubectl get pods -o wide`, `$7` is NODE. In `--all-namespaces` output, the columns shift right by one — `$8` is NODE (since `$1` becomes NAMESPACE).
 - **Lesson:** When a DaemonSet pod is stuck on a full node, delete a moveable Deployment pod from that specific node. The Deployment controller reschedules it elsewhere, freeing the slot for the DaemonSet.
+
+### L-021: End-of-day teardown and next-day rebootstrap checklist
+
+- **Goal:** Cleanly remove sandbox resources and recreate in a personal subscription with a fresh Terraform backend.
+
+- **Teardown (subscription cleanup):**
+  ```bash
+  # 1) Confirm the active subscription before deleting anything
+  az account show -o table
+
+  # 2) Delete project resource groups (recommended)
+  az group delete --name rg-devops-aks --yes --no-wait
+  az group delete --name MC_rg-devops-aks_aks-devops-project_swedencentral --yes --no-wait
+
+  # 3) Optional: wait and verify deletion
+  az group list -o table
+  ```
+
+- **Next-day rebootstrap (personal subscription):**
+  ```bash
+  # 1) Select personal subscription
+  az account set --subscription "<PERSONAL_SUBSCRIPTION_ID_OR_NAME>"
+  az account show -o table
+
+  # 2) Create backend resource group and storage
+  az group create -n rg-tfstate-aks -l swedencentral
+  az storage account create -g rg-tfstate-aks -n <NEW_UNIQUE_STORAGE_ACCOUNT> -l swedencentral --sku Standard_LRS
+  az storage container create --name tfstate --account-name <NEW_UNIQUE_STORAGE_ACCOUNT>
+  ```
+
+- **Terraform backend reset:**
+  1. Update `terraform/backend.tf` with the new backend resource group and storage account.
+  2. Run `terraform init -reconfigure`.
+  3. Validate `terraform plan` before apply.
+
+- **GitHub OIDC and repo settings refresh:**
+  1. Create/verify service principal and federated credentials for the personal subscription.
+  2. Update repo secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`.
+  3. Update repo variables (resource group, AKS cluster name, ACR name) if names changed.
+
+- **Lesson:** Rebuild day succeeds fastest when backend, OIDC, and repo secrets are refreshed in this order: subscription -> backend -> Terraform init -> OIDC secrets -> workflow rerun.
 
 ### L-021: Deployment rollout exceeded progress deadline due to namespace ResourceQuota
 
