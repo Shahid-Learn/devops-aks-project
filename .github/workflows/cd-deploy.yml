@@ -40,11 +40,17 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v2
+        with:
+          kubelogin-version: 'latest'
+
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
           resource-group: ${{ vars.RESOURCE_GROUP }}
           cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+          use-kubelogin: true
 
       - name: Validate and normalize services list
         id: services
