@@ -112,6 +112,77 @@ TF_STATE_CONTAINER      # e.g., "tfstate"
 
 ---
 
+## 6.0 Current Implemented Flow (June 2026)
+
+This section documents the pipeline as it is currently implemented across two repositories.
+
+### Source repo: `Shahid-Learn/opentelemetry-demo`
+
+- Workflow: `.github/workflows/ci-build-push.yml`
+- Trigger: `push` / `pull_request` on `main` for `src/**`, plus manual `workflow_dispatch`
+- Behavior:
+  - Detect changed services from git diff.
+  - Build and push changed service images to ACR using per-service repositories:
+    - `acrdevopsprojectd1e51ba4.azurecr.io/<service>:<short-sha>`
+    - `acrdevopsprojectd1e51ba4.azurecr.io/<service>:latest`
+  - Run Trivy scan and upload SARIF.
+  - On successful build on `main`, dispatch infra workflow with:
+    - `image_tag` (short SHA)
+    - `changed_services` (JSON array)
+    - `namespace` (default `otel-demo`)
+
+### Infra repo: `Shahid-Learn/devops-aks-project`
+
+- Workflow: `.github/workflows/cd-deploy.yml`
+- Trigger: `workflow_dispatch` (called by source repo)
+- Behavior:
+  - Login to Azure via OIDC.
+  - Set AKS context.
+  - Deploy only changed services by updating images to `acrdevopsprojectd1e51ba4.azurecr.io/<service>:<image_tag>`.
+  - Use quota-safe rollout strategy per deployment:
+    - `maxSurge: 0`
+    - `maxUnavailable: 1`
+  - Wait for rollout completion for each changed service.
+
+### Why quota-safe rollout is required
+
+`otel-demo` namespace has a CPU `ResourceQuota` and default pod CPU limits. A default RollingUpdate (`maxSurge > 0`) can request extra temporary pods and fail with `exceeded quota`.
+
+Using `maxSurge: 0` avoids deadlocks and performs in-place replacement.
+
+### Required GitHub settings for this cross-repo model
+
+In **source repo** (`opentelemetry-demo`):
+
+- Secrets:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+  - `INFRA_REPO_DISPATCH_TOKEN` (PAT with workflow/repo access to infra repo)
+- Variables:
+  - `ACR_NAME`
+  - `INFRA_REPO_OWNER`
+  - `INFRA_REPO_NAME`
+
+In **infra repo** (`devops-aks-project`):
+
+- Secrets:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- Variables:
+  - `ACR_NAME`
+  - `RESOURCE_GROUP`
+  - `AKS_CLUSTER_NAME`
+
+### Operational expectations
+
+- If `cd-deploy.yml` is not present on the infra repo target branch (usually `main`), dispatch fails.
+- If a changed service has no matching deployment in `otel-demo`, it is skipped.
+- Source repo fork-specific checks may be disabled in UI to avoid unrelated upstream gating workflows.
+
+---
+
 ## 6.1 Unified Pipeline Overview
 
 ```
